@@ -8,6 +8,7 @@ const authenticate = require('../middleware/authenticate');
 const requirePermission = require('../middleware/requirePermission');
 const { AppError } = require('../middleware/errorHandler');
 const alur = require('../services/alur.service');
+const { bolehkah } = require('../services/izin.service');
 const router = express.Router();
 router.use(authenticate);
 const run = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
@@ -26,12 +27,12 @@ for (const [slug, jenis] of [['surat-masuk', 'masuk'], ['surat-keluar', 'keluar'
     const data = await alur.patchSurat(req.user, jenis, req.params.id, req.body); alur.audit(req, 'update', resource, data); ok(res, data);
   }));
 }
-router.get('/disposisi', requirePermission('disposisi', 'read'), requirePermission('surat_masuk', 'read'), run(async (req, res) => res.json({ success: true, ...await alur.listDisposisi(req.user, req.query) })));
-router.get('/disposisi/:id', requirePermission('disposisi', 'read'), requirePermission('surat_masuk', 'read'), run(async (req, res) => ok(res, await alur.findDisposisi(req.user, req.params.id))));
-router.post('/disposisi', requirePermission('disposisi', 'create'), requirePermission('surat_masuk', 'read'), run(async (req, res) => {
+router.get('/disposisi', requirePermission('disposisi', 'read'), run(async (req, res) => res.json({ success: true, ...await alur.listDisposisi(req.user, req.query) })));
+router.get('/disposisi/:id', requirePermission('disposisi', 'read'), run(async (req, res) => ok(res, await alur.findDisposisi(req.user, req.params.id))));
+router.post('/disposisi', requirePermission('disposisi', 'create'), run(async (req, res) => {
   const data = await alur.createDisposisi(req.user, req.body); alur.audit(req, 'create', 'disposisi', data); ok(res, data, 201);
 }));
-router.patch('/disposisi/:id', requirePermission('disposisi', 'update'), requirePermission('surat_masuk', 'read'), run(async (req, res) => {
+router.patch('/disposisi/:id', requirePermission('disposisi', 'update'), run(async (req, res) => {
   const data = await alur.patchDisposisi(req.user, req.params.id, req.body); alur.audit(req, 'update', 'disposisi', data); ok(res, data);
 }));
 
@@ -77,7 +78,11 @@ router.get('/lampiran/:id', requirePermission('lampiran', 'read'), run(async (re
   const file = await prisma.lampiran.findFirst({ where: { id: req.params.id, deleted_at: null } });
   if (!file) throw new AppError(404, 'Lampiran tidak ditemukan.');
   const jenis = jenisSurat(file.entitas_jenis);
-  await alur.permission(req.user, `surat_${jenis}`, 'read');
+  const canReadSurat = await bolehkah(prisma, req.user, `surat_${jenis}`, 'read');
+  if (!canReadSurat) {
+    const canDisposisi = await bolehkah(prisma, req.user, 'disposisi', 'read');
+    if (!canDisposisi) throw new AppError(403, 'Izin untuk operasi ini tidak aktif. Hubungi Superadmin.');
+  }
   await alur.findSurat(req.user, jenis, file.entitas_id);
   if (!/^[0-9a-f-]{36}\.(pdf|png|jpg)$/.test(file.path_relatif)) throw new AppError(404, 'Lampiran tidak ditemukan.');
   const destination = path.join(privateDir(), file.path_relatif);

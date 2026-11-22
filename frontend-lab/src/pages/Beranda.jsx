@@ -23,7 +23,7 @@ export default function Beranda() {
     ['Surat keluar', data?.ringkasan?.surat_keluar, 'keluar', 'teal', 'Dokumen dalam lingkup Anda'],
     ['Disposisi aktif', data?.ringkasan?.disposisi_aktif, 'disposisi', '', 'Menunggu atau sedang ditindaklanjuti'],
     ['Lewat tenggat', data?.ringkasan?.terlambat, 'aktivitas', 'amber', 'Perlu perhatian dan tindak lanjut'],
-  ].filter(([, , icon]) => icon !== 'keluar' || (!staf && boleh('surat_keluar', 'read')));
+  ].filter(([, , icon]) => (icon !== 'keluar' || (!staf && boleh('surat_keluar', 'read'))) && (icon !== 'masuk' || boleh('surat_masuk', 'read')));
   const max = Math.max(1, ...(data?.tren || []).flatMap((t) => [t.masuk, t.keluar]));
   const actions = [
     ['surat_masuk', 'create', '/surat/masuk', 'Catat surat masuk', 'Registrasi dan unggah hasil scan', 'masuk'],

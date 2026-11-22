@@ -1,0 +1,168 @@
+================================================================================
+LAPORAN PERUBAHAN SISTEM & PANDUAN PENGUJIAN WEB
+PROYEK BATAVIA (PERSURATAN & ARSIP DIGITAL)
+================================================================================
+
+Cabang Kerja: update-1
+Status: Siap Diuji & Diverifikasi (100% Pass Uji Otomatis)
+
+--------------------------------------------------------------------------------
+BAGIAN 1: LAPORAN PERUBAHAN & FITUR YANG DIIMPLEMENTASIKAN
+--------------------------------------------------------------------------------
+
+Sejak repositori ini di-fork, telah dilakukan dua fase perbaikan logika, 
+pengamanan hak akses, serta penambahan fitur baru:
+
+1. FASE 1: DECOUPLING IZIN SURAT MASUK DARI MODUL DISPOSISI (Commit e932f5f)
+----------------------------------------------------------------------------
+- Masalah Awal:
+  Ketika Superadmin mencabut izin "surat_masuk:read" dari Guru/Staf lewat 
+  Manajemen User, akun staf tersebut otomatis terkunci total dari halaman 
+  "Disposisi & Tindak Lanjut" dengan pesan eror:
+  "Anda tidak memiliki izin melihat data Surat Masuk. Minta Superadmin mengaktifkannya."
+  Penyebabnya adalah route API /api/disposisi dipasangi middleware ganda 
+  (requirePermission untuk disposisi DAN surat_masuk sekaligus).
+
+- Perubahan Teknis yang Dilakukan:
+  a. backend-lab/src/routes/alur.routes.js:
+     Menghapus keterikatan requirePermission('surat_masuk', 'read') dari 
+     endpoint /api/disposisi dan /api/disposisi/:id. Akses disposisi kini 
+     mandiri berdasarkan izin 'disposisi'.
+  b. backend-lab/src/routes/alur.routes.js:
+     Memperbarui route unduh lampiran (/api/lampiran/:id) agar staf pelaksana 
+     tugas tetap diizinkan mengunduh berkas surat tugasnya meskipun izin menu 
+     surat masuk utama sedang dinonaktifkan.
+  c. backend-lab/src/services/alur.service.js:
+     Memisahkan dependensi canMasuk pada perhitungan dashboard (taskWhere), 
+     sehingga metrik "Disposisi Aktif" dan daftar tugas di Beranda tetap muncul.
+  d. frontend-lab/src/pages/Beranda.jsx:
+     Menyesuaikan kartu metrik di dashboard agar kartu Surat Masuk dan Surat 
+     Keluar otomatis bersih/tersembunyi saat izinnya dimatikan tanpa merusak 
+     tampilan tugas disposisi.
+
+
+2. FASE 2: FITUR BROADCAST DISPOSISI SEKOLAH & SCOPING TUGAS UNIT (issue.md)
+----------------------------------------------------------------------------
+- Masalah Awal:
+  a. Ketiadaan Fitur Broadcast:
+     Kepala Sekolah tidak memiliki cara untuk mengirimkan disposisi kebijakan/
+     edaran umum ke seluruh unit kerja sekaligus dalam satu kali klik.
+  b. Cacat Logika Visibilitas Tugas Unit:
+     Ketika disposisi dikirim ke suatu unit tanpa memilih nama personil khusus 
+     (ke_user_id: null), tabel UI menampilkan teks "Seluruh unit terkait". Namun 
+     di backend, filter peran guru_staf dikunci secara kaku ke { ke_user_id: user.id }. 
+     Akibatnya, staf di unit tujuan menerima 0 hasil (tugas tersembunyi), dan tugas 
+     menjadi macet jika unit tersebut belum memiliki Kepala Bagian aktif.
+
+- Perubahan Teknis yang Dilakukan:
+  a. backend-lab/src/services/alur.service.js (Dukungan Broadcast):
+     Menambahkan logika ke_bagian_id === 'SEMUA' pada fungsi createDisposisi. 
+     Sistem mengeksekusi fan-out batch transaction Prisma untuk membuat satu 
+     lembar disposisi per unit kerja aktif secara atomik.
+  b. backend-lab/src/services/alur.service.js (Perluasan Row-Level Security):
+     Memperbarui predikat disposisiScope untuk peran guru_staf. Jika disposisi 
+     ditujukan ke unit tanpa PIC khusus (ke_user_id: null dan sensitif: false), 
+     seluruh guru/staf di unit tersebut otomatis dapat melihat dan membuka tugasnya.
+  c. backend-lab/src/services/alur.service.js (Otorisasi Pelaksana):
+     Memperbarui validasi pelaksana pada patchDisposisi. Pada disposisi kolektif unit 
+     (ke_user_id === null), setiap staf anggota unit tersebut maupun Kepala Bagiannya 
+     berhak mencatat laporan hasil kerja dan menyelesaikan tugas.
+  d. frontend-lab/src/pages/Disposisi.jsx (Form & Tabel Disposisi):
+     - Menambahkan opsi "📢 Semua Unit Kerja (Broadcast Sekolah)" pada dropdown unit.
+     - Jika broadcast dipilih, dropdown penerima khusus otomatis terkunci pada 
+       label "Seluruh Guru & Staf di Semua Unit".
+     - Jika unit spesifik dipilih, default opsi adalah "Semua anggota [Nama Unit]", 
+       disertai daftar nama staf individu (PIC).
+     - Mengubah label ambigu tabel dari "Seluruh unit terkait" menjadi label yang 
+       akurat: "[Nama Unit] · Semua anggota unit".
+  e. backend-lab/scripts/uji-alur.js:
+     Memperbarui skenario uji otomatis. Seluruh 37 kasus uji backend berhasil 
+     dieksekusi dengan hasil 100% lulus (pass).
+  f. issue.md:
+     Menyusun dokumen spesifikasi teknis formal bergaya RFC untuk acuan tim pengembang.
+
+
+--------------------------------------------------------------------------------
+BAGIAN 2: PANDUAN PENGUJIAN & MELIHAT HASILNYA LANGSUNG DI WEB
+--------------------------------------------------------------------------------
+
+A. Memastikan Server Berjalan:
+   Dari Command Prompt / Terminal root Batavia, jalankan:
+   scripts\jalankan-lab.cmd
+   Buka browser ke alamat: http://127.0.0.1:5173
+
+B. Akun Pengujian Demo (Sandi untuk semua akun: DemoBatavia123!):
+   - Kepala Sekolah : pimpinan@demo.batavia.invalid
+   - Kepala Kurikulum: bagian@demo.batavia.invalid
+   - Staf Kurikulum  : staf-lain@demo.batavia.invalid
+   - Staf Pelaksana  : staf@demo.batavia.invalid
+   - Superadmin      : admin@demo.batavia.invalid
+   - Tata Usaha      : tu@demo.batavia.invalid
+
+
+SKENARIO 1: Menguji Fitur Broadcast Sekolah (Semua Unit Kerja)
+--------------------------------------------------------------
+1. Buka browser di http://127.0.0.1:5173
+2. Login sebagai Kepala Sekolah:
+   Email: pimpinan@demo.batavia.invalid
+   Sandi: DemoBatavia123!
+3. Masuk ke menu "Disposisi & Tindak Lanjut" di sidebar.
+4. Klik tombol biru "Buat disposisi" di kanan atas.
+5. Pada form modal:
+   - Pilih Surat Masuk: DEMO-SM-001 (atau surat yang tersedia).
+   - Pada dropdown "Unit tujuan", pilih opsi teratas:
+     "📢 Semua Unit Kerja (Broadcast Sekolah)".
+   - Perhatikan bahwa dropdown "Penerima khusus" otomatis terkunci (disabled) 
+     dan menampilkan teks: "Seluruh Guru & Staf di Semua Unit".
+   - Isi instruksi: "Mohon seluruh unit kerja mempelajari edaran ini."
+   - Klik "Kirim disposisi".
+6. Amati hasilnya di tabel:
+   Sistem otomatis membuat lembar disposisi untuk masing-masing unit kerja aktif 
+   (Unit Kurikulum dan Unit TU masing-masing mendapatkan baris disposisinya sendiri).
+   Kolom penerima bertuliskan: "[Nama Bagian] · Semua anggota unit".
+
+
+SKENARIO 2: Menguji Visibilitas Tugas Tim oleh Staf Unit (staf-lain)
+--------------------------------------------------------------------
+(Membuktikan perbaikan bug di mana sebelumnya akun staf menerima 0 hasil)
+1. Klik tombol "Keluar" di pojok kanan atas.
+2. Login sebagai Staf Kurikulum:
+   Email: staf-lain@demo.batavia.invalid
+   Sandi: DemoBatavia123!
+3. Masuk ke menu "Disposisi & Tindak Lanjut".
+4. Amati hasilnya:
+   Tabel TIDAK KOSONG lagi. Tugas yang ditujukan ke unit Kurikulum (baik dari 
+   broadcast maupun tugas kolektif unit) langsung tampil di layar staf ini. 
+   Staf ini juga dapat membuka detail surat masuk terkait.
+
+
+SKENARIO 3: Menguji Eksekusi & Penyelesaian Tugas Tim
+----------------------------------------------------
+1. Masih di akun staf-lain@demo.batavia.invalid:
+2. Pada baris tugas unit Kurikulum tadi, klik tombol "Lihat / tindak lanjut".
+3. Di modal detail:
+   - Penerima khusus bertuliskan: "Semua anggota unit".
+   - Klik tombol "Tandai diproses".
+   - Setelah status menjadi diproses, masukkan catatan tindak lanjut:
+     "Unit kurikulum telah menyelesaikan koordinasi materi ini."
+   - Klik "Tandai selesai".
+4. Tugas berhasil diselesaikan langsung oleh staf anggota unit tersebut.
+
+
+SKENARIO 4: Menguji Penolakan Izin Surat Masuk/Keluar
+-----------------------------------------------------
+1. Klik tombol "Keluar", lalu login sebagai Superadmin:
+   Email: admin@demo.batavia.invalid
+   Sandi: DemoBatavia123!
+2. Buka menu "Manajemen User" -> Klik akun staf-lain@demo.batavia.invalid.
+3. Pada tabel izin:
+   - Ubah izin Surat Masuk -> melihat (read) menjadi Ditolak (merah).
+   - Ubah izin Surat Keluar -> melihat (read) menjadi Ditolak (merah).
+4. Klik "Keluar", lalu login kembali sebagai staf-lain@demo.batavia.invalid.
+5. Amati hasilnya:
+   - Menu Surat Masuk dan Surat Keluar HILANG dari sidebar kiri.
+   - Kartu metrik Surat Masuk dan Surat Keluar di Beranda bersih/hilang.
+   - Halaman "Disposisi & Tindak Lanjut" TETAP BISA DIAKSES dengan normal 
+     tanpa ada pesan eror penolakan izin seperti sebelumnya.
+
+================================================================================

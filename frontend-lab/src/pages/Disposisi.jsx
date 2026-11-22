@@ -76,7 +76,7 @@ export default function Disposisi() {
   const columns = [
     { key: 'surat', title: 'Surat masuk', render: (r) => <><strong>{r.surat_masuk?.nomor_surat || r.surat_masuk?.nomor_registrasi || '-'}</strong><small>{r.surat_masuk?.perihal || '-'}</small></> },
     { key: 'pemberi', title: 'Pemberi arahan', render: (r) => r.dari?.nama_lengkap || '-' },
-    { key: 'tujuan', title: 'Unit / penerima', render: (r) => <>{r.ke_bagian?.nama || '-'}<small>{r.ke_user?.nama_lengkap || 'Seluruh unit terkait'}</small></> },
+    { key: 'tujuan', title: 'Unit / penerima', render: (r) => <>{r.ke_bagian?.nama || '-'}<small>{r.ke_user?.nama_lengkap || 'Semua anggota unit'}</small></> },
     { key: 'instruksi', title: 'Instruksi', render: (r) => <p style={{ whiteSpace: 'pre-wrap' }}>{r.instruksi}</p> },
     { key: 'deadline', title: 'Batas waktu', render: (r) => tanggal(r.deadline) },
     { key: 'status', title: 'Status', render: (r) => <Badge value={r.status} /> },
@@ -127,18 +127,20 @@ function FormDisposisi({ suratPilihan, onClose, onSaved }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [ulang]);
+  const isSemua = form.ke_bagian_id === 'SEMUA';
+  const selectedBagian = refs.bagian.find((b) => b.id === form.ke_bagian_id);
   const penerima = refs.pengguna.filter((p) => p.bagian_id === form.ke_bagian_id && p.aktif !== false);
   const isi = (key) => (e) => setForm((v) => ({ ...v, [key]: e.target.value }));
 
   async function submit(e) {
     e.preventDefault(); if (lock.current || loading || refError) return;
     if (!form.instruksi.trim()) { setError('Instruksi wajib diisi.'); return; }
-    if (!surat.some((s) => s.id === form.surat_masuk_id) || !refs.bagian.some((b) => b.id === form.ke_bagian_id)) { setError('Pilih surat masuk dan unit tujuan yang tersedia.'); return; }
-    if (form.ke_user_id && !penerima.some((p) => p.id === form.ke_user_id)) { setError('Penerima harus berasal dari unit tujuan yang dipilih.'); return; }
+    if (!surat.some((s) => s.id === form.surat_masuk_id) || (!isSemua && !refs.bagian.some((b) => b.id === form.ke_bagian_id))) { setError('Pilih surat masuk dan unit tujuan yang tersedia.'); return; }
+    if (!isSemua && form.ke_user_id && !penerima.some((p) => p.id === form.ke_user_id)) { setError('Penerima harus berasal dari unit tujuan yang dipilih.'); return; }
     lock.current = true; setBusy(true); setError('');
     const controller = new AbortController(); mutation.current = controller;
     const payload = { surat_masuk_id: form.surat_masuk_id, ke_bagian_id: form.ke_bagian_id, instruksi: form.instruksi.trim() };
-    if (form.ke_user_id) payload.ke_user_id = form.ke_user_id;
+    if (!isSemua && form.ke_user_id) payload.ke_user_id = form.ke_user_id;
     if (form.deadline) payload.deadline = form.deadline;
     try {
       const { data } = await api.post('/disposisi', payload, { signal: controller.signal });
@@ -155,14 +157,14 @@ function FormDisposisi({ suratPilihan, onClose, onSaved }) {
       <fieldset disabled={busy} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
         <div className="form-grid">
           <div className="full-width"><Field title="Surat masuk *" hint="Daftar 100 surat terbaru yang dapat Anda akses."><select required disabled={loading || Boolean(refError)} value={form.surat_masuk_id} onChange={isi('surat_masuk_id')}><option value="">Pilih surat masuk</option>{surat.map((s) => <option key={s.id} value={s.id}>{s.nomor_surat || s.nomor_registrasi} · {s.perihal}</option>)}</select></Field></div>
-          <Field title="Unit tujuan *"><select required disabled={loading || Boolean(refError)} value={form.ke_bagian_id} onChange={(e) => setForm((v) => ({ ...v, ke_bagian_id: e.target.value, ke_user_id: '' }))}><option value="">Pilih unit kerja</option>{refs.bagian.map((b) => <option key={b.id} value={b.id}>{b.nama}</option>)}</select></Field>
-          <Field title="Penerima khusus (opsional)" hint="Hanya pengguna aktif dari unit yang dipilih."><select disabled={!form.ke_bagian_id || loading || Boolean(refError)} value={form.ke_user_id} onChange={isi('ke_user_id')}><option value="">Unit kerja tanpa penerima khusus</option>{penerima.map((p) => <option key={p.id} value={p.id}>{p.nama_lengkap}</option>)}</select></Field>
+          <Field title="Unit tujuan *"><select required disabled={loading || Boolean(refError)} value={form.ke_bagian_id} onChange={(e) => setForm((v) => ({ ...v, ke_bagian_id: e.target.value, ke_user_id: '' }))}><option value="">Pilih unit kerja</option><option value="SEMUA">📢 Semua Unit Kerja (Broadcast Sekolah)</option>{refs.bagian.map((b) => <option key={b.id} value={b.id}>{b.nama}</option>)}</select></Field>
+          <Field title="Penerima khusus (opsional)" hint={isSemua ? 'Otomatis ditujukan ke seluruh anggota di setiap unit kerja.' : 'Pilih staf tertentu atau biarkan untuk seluruh anggota unit.'}><select disabled={!form.ke_bagian_id || isSemua || loading || Boolean(refError)} value={isSemua ? '' : form.ke_user_id} onChange={isi('ke_user_id')}>{isSemua ? <option value="">Seluruh Guru & Staf di Semua Unit</option> : <><option value="">Semua anggota {selectedBagian?.nama || 'unit'}</option>{penerima.map((p) => <option key={p.id} value={p.id}>{p.nama_lengkap}</option>)}</>}</select></Field>
           <div className="full-width"><Field title="Instruksi *"><textarea required rows={4} maxLength={2000} value={form.instruksi} onChange={isi('instruksi')} /></Field></div>
           <Field title="Batas waktu (opsional)"><input type="date" value={form.deadline} onChange={isi('deadline')} /></Field>
         </div>
-        {!loading && !refError && (!surat.length || !refs.bagian.length) && <Notice error>Belum ada surat masuk atau unit tujuan. Lengkapi data sebelum membuat disposisi.</Notice>}
+        {!loading && !refError && (!surat.length || (!refs.bagian.length && !isSemua)) && <Notice error>Belum ada surat masuk atau unit tujuan. Lengkapi data sebelum membuat disposisi.</Notice>}
         {!loading && !refError && form.surat_masuk_id && !surat.some((s) => s.id === form.surat_masuk_id) && <Notice error>Surat pilihan tidak tersedia dalam daftar. Pilih surat masuk yang dapat Anda akses.</Notice>}
-        <div className="form-actions"><button type="button" className="button button-light" onClick={onClose}>Batal</button><button className="button" type="submit" disabled={loading || Boolean(refError) || !surat.length || !refs.bagian.length}>{busy ? 'Mengirim disposisi...' : 'Kirim disposisi'}</button></div>
+        <div className="form-actions"><button type="button" className="button button-light" onClick={onClose}>Batal</button><button className="button" type="submit" disabled={loading || Boolean(refError) || !surat.length || (!refs.bagian.length && !isSemua)}>{busy ? 'Mengirim disposisi...' : 'Kirim disposisi'}</button></div>
       </fieldset>
     </form>
   </Dialog>;
@@ -179,7 +181,7 @@ function DetailDisposisi({ item, user, boleh, onClose, onSaved }) {
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; controller.current?.abort(); }; }, []);
   const unitSama = Boolean(user?.bagian_id && user.bagian_id === item.ke_bagian_id);
-  const penerima = user?.id === item.ke_user_id || (unitSama && user?.peran === 'kepala_bagian');
+  const penerima = user?.id === item.ke_user_id || (unitSama && (user?.peran === 'kepala_bagian' || item.ke_user_id === null));
   const pelaksana = ['kepala_bagian', 'guru_staf'].includes(user?.peran);
   const dapatProses = pelaksana && penerima && boleh('disposisi', 'update');
   const statusIndex = STATUS.indexOf(item.status);
@@ -220,7 +222,7 @@ function DetailDisposisi({ item, user, boleh, onClose, onSaved }) {
       <div><dt>Nomor surat</dt><dd>{item.surat_masuk?.nomor_surat || item.surat_masuk?.nomor_registrasi || '-'}</dd></div><div><dt>Status</dt><dd><Badge value={item.status} /></dd></div>
       <div className="full-width"><dt>Perihal</dt><dd>{item.surat_masuk?.perihal || '-'}</dd></div>
       <div><dt>Pemberi arahan</dt><dd>{item.dari?.nama_lengkap || '-'}</dd></div><div><dt>Unit tujuan</dt><dd>{item.ke_bagian?.nama || '-'}</dd></div>
-      <div><dt>Penerima khusus</dt><dd>{item.ke_user?.nama_lengkap || 'Unit kerja tanpa penerima khusus'}</dd></div><div><dt>Batas waktu</dt><dd>{tanggal(item.deadline)}</dd></div>
+      <div><dt>Penerima khusus</dt><dd>{item.ke_user?.nama_lengkap || 'Semua anggota unit'}</dd></div><div><dt>Batas waktu</dt><dd>{tanggal(item.deadline)}</dd></div>
       <div><dt>Dibuat</dt><dd>{tanggal(item.created_at)}</dd></div><div><dt>Dibaca</dt><dd>{tanggal(item.dibaca_at)}</dd></div>
       <div className="full-width"><dt>Instruksi</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{item.instruksi}</dd></div>
     </dl>

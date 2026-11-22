@@ -131,10 +131,12 @@ test('Alur Batavia: registrasi, scope, disposisi, dashboard, lampiran dan seed',
       assert.ok(dash.tren.some((b) => b.bulan === '2026-10' && b.masuk === 10 && b.keluar === 1));
       await prisma.userPermission.upsert({ where: { user_id_resource_action: { user_id: staff.id, resource: 'surat_masuk', action: 'read' } }, create: { user_id: staff.id, resource: 'surat_masuk', action: 'read', allowed: false }, update: { allowed: false } });
       status(await call(staff, 'GET', '/surat-masuk'), 403);
+      const staffTasks = status(await call(staff, 'GET', '/disposisi'), 200).data;
+      assert.equal(staffTasks.length, 1);
       const deniedDash = status(await call(staff, 'GET', '/dashboard'), 200).data;
       assert.equal(deniedDash.ringkasan.surat_masuk, 0); assert.equal(deniedDash.ringkasan.disposisi_aktif, 0);
       assert.ok(deniedDash.tren.every((month) => month.masuk === 0)); assert.equal(deniedDash.prioritas.length, 0);
-      assert.ok(deniedDash.aktivitas.every((a) => a.entitas !== 'surat_masuk' && a.entitas !== 'disposisi'));
+      assert.ok(deniedDash.aktivitas.every((a) => a.entitas !== 'surat_masuk'));
       const noNumber = { tujuan: 'Auto Sintetis', tanggal_surat: '2026-11-01', perihal: 'Nomor otomatis', klasifikasi_id: klasifikasi.id, jenis_surat_id: jenis.id };
       const auto = status(await call(tu, 'POST', '/surat-keluar', noNumber), 201).data;
       assert.equal(auto.nomor_surat, auto.nomor_registrasi); assert.equal(auto.nomor_registrasi, 'SK/002/XI/2026');
@@ -158,7 +160,7 @@ test('Alur Batavia: registrasi, scope, disposisi, dashboard, lampiran dan seed',
       status(await call(peer, 'GET', `/surat-masuk/${other.id}`), 404);
       status(await call(head, 'PATCH', `/disposisi/${sensitiveTask.id}`, { ke_user_id: head2.id }), 400);
       const regular = status(await call(principal, 'POST', '/disposisi', { surat_masuk_id: (await prisma.suratMasuk.findFirst({ where: { nomor_surat: 'RACE/0' } })).id, ke_bagian_id: bagian.id, instruksi: 'Bagi tugas dalam unit' }), 201).data;
-      status(await call(peer, 'GET', `/surat-masuk/${regular.surat_masuk_id}`), 404);
+      status(await call(peer, 'GET', `/surat-masuk/${regular.surat_masuk_id}`), 200);
       status(await call(head, 'PATCH', `/disposisi/${regular.id}`, { ke_user_id: peer.id }), 200);
       status(await call(peer, 'GET', `/surat-masuk/${regular.surat_masuk_id}`), 200);
       status(await call(head2, 'PATCH', `/disposisi/${regular.id}`, { ke_user_id: head2.id }), 404);
