@@ -6,8 +6,9 @@
  */
 const express = require('express');
 const authenticate = require('../middleware/authenticate');
-const { logAudit, logActivity } = require('../middleware/logActivity');
+const { logActivity } = require('../middleware/logActivity');
 const katalog = require('../services/katalog.service');
+const { AppError } = require('../middleware/errorHandler');
 const requirePermission = require('../middleware/requirePermission');
 
 const router = express.Router();
@@ -18,6 +19,10 @@ function izinKatalog(action) {
   return (req, res, next) => {
     try {
       const def = katalog.pastikanJenis(req.params.jenis);
+      if (req.user.peran !== 'superadmin') {
+        if (action === 'delete') return next(new AppError(403, 'Hanya Superadmin dapat menghapus katalog.'));
+        if (def.superadmin && action !== 'read') return next(new AppError(403, 'Hanya Superadmin dapat mengelola Unit Kerja.'));
+      }
       return requirePermission(def.resource, action)(req, res, next);
     } catch (e) { next(e); }
   };
@@ -58,6 +63,21 @@ router.patch(
       res.locals.entitas_id = diubah.id;
       res.locals.detail = `Mengubah ${def.label} "${diubah.nama}" (kode ${diubah.kode}).`;
       res.json({ success: true, data: diubah });
+    } catch (e) { next(e); }
+  }
+);
+
+router.delete(
+  '/:jenis/:id',
+  izinKatalog('read'),
+  izinKatalog('delete'),
+  logActivity('delete', 'katalog'),
+  async (req, res, next) => {
+    try {
+      const dihapus = await katalog.hapus(req.params.jenis, req.params.id, req.body);
+      res.locals.entitas_id = dihapus.id;
+      res.locals.detail = `Menghapus katalog ${req.params.jenis} "${dihapus.nama}" (ID ${dihapus.id}).`;
+      res.json({ success: true, data: { id: dihapus.id } });
     } catch (e) { next(e); }
   }
 );

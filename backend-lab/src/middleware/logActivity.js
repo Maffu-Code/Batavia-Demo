@@ -7,10 +7,9 @@
  * Setiap penulisan dilacak supaya uji bisa menunggu lewat `drainAudit()`.
  * Tanpa ini, assertion jumlah baris balapan dengan penulis async.
  *
- * Catatan HASH CHAIN (D-005):
- *   Kolom `prev_hash` dan `row_hash` dipakai untuk deteksi tampering.
- *   Script verifikasi menyusul; kalau user memilih T2 lengkap, ganti
- *   implementasinya di berkas ini saja (satu pintu).
+ * Audit lab: append serial per proses, dengan baca dan tulis dalam satu
+ * transaksi. Tidak memperbaiki rantai historis atau menjamin koordinasi
+ * antarproses pada semua database.
  */
 const crypto = require('crypto');
 const prisma = require('../config/database');
@@ -31,23 +30,23 @@ function hitungRowHash(fields, prevHash) {
   return crypto.createHash('sha256').update(kanonik).digest('hex');
 }
 
-const _pending = new Set();
+let tail = Promise.resolve();
 
 async function _tulis(opt) {
-  try {
-    const user = opt.user || null;
-    const now = new Date();
-    const prev = await prisma.activityLog.findFirst({
-      orderBy: { created_at: 'desc' },
-      select: { row_hash: true },
+  const user = opt.user || null;
+  const detail = opt.detail
+    ?? (opt.aksi === 'login_gagal' && opt.emailJikaGagalLogin
+          ? `Percobaan login gagal untuk email "${opt.emailJikaGagalLogin}".`
+          : null);
+
+  await prisma.$transaction(async (tx) => {
+    const prev = await tx.activityLog.findFirst({
+      orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+      select: { row_hash: true, created_at: true },
     });
-    const prevHash = prev?.row_hash || null;
-
-    const detail = opt.detail
-      ?? (opt.aksi === 'login_gagal' && opt.emailJikaGagalLogin
-            ? `Percobaan login gagal untuk email "${opt.emailJikaGagalLogin}".`
-            : null);
-
+    const prevHash = prev?.row_hash ?? null;
+    // Urutan append tetap tegas saat jam mundur atau timestamp bertabrakan.
+    const created_at = new Date(Math.max(Date.now(), prev ? prev.created_at.getTime() + 1 : 0));
     const fields = {
       user_id:    user?.id || null,
       nama_user:  user?.nama || user?.nama_lengkap || 'Sistem',
@@ -56,16 +55,13 @@ async function _tulis(opt) {
       entitas_id: opt.entitasId || null,
       detail,
       ip:         opt.req?.ip || null,
-      created_at: now,
+      created_at,
     };
     const row_hash = hitungRowHash(fields, prevHash);
-
-    await prisma.activityLog.create({
+    await tx.activityLog.create({
       data: { ...fields, prev_hash: prevHash, row_hash },
     });
-  } catch (err) {
-    console.error('[activity_logs] gagal mencatat:', err.message);
-  }
+  });
 }
 
 /**
@@ -79,17 +75,20 @@ async function _tulis(opt) {
  * @param {string|null} opt.emailJikaGagalLogin untuk login_gagal tanpa user
  */
 function logAudit(opt) {
-  const task = _tulis(opt);
-  _pending.add(task);
-  task.finally(() => _pending.delete(task));
-  return task;
+  tail = tail.then(() => _tulis(opt)).catch(() => {
+    // Prisma error detail can contain audit data. Keep stderr diagnostic generic.
+    console.error('[activity_logs] gagal mencatat audit.');
+  });
+  return tail;
 }
 
 /** Menunggu semua penulisan audit yang masih berjalan. Dipakai uji. */
 async function drainAudit() {
-  while (_pending.size > 0) {
-    await Promise.allSettled([..._pending]);
-  }
+  let pending;
+  do {
+    pending = tail;
+    await pending;
+  } while (pending !== tail);
 }
 
 /**

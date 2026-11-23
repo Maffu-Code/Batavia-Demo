@@ -17,7 +17,7 @@ scripts\jalankan-lab.cmd              jalankan backend + frontend
 
 ```
 npm ci
-copy .env.contoh .env
+if not exist .env copy .env.contoh .env
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
@@ -30,20 +30,17 @@ npx prisma migrate deploy
 node scripts/seed-katalog.js
 ```
 
-Jangan memakai `prisma migrate dev` atau `npm run seed` untuk setup
-pertama. `npm run seed` (seed-demo.js) MENGHAPUS data lab lalu mengisi
-ulang akun lama `@memoria.lab`; gunakan hanya kalau memang ingin reset
-total.
+Untuk setup gunakan `--prepare`, bukan `prisma migrate dev` atau
+`prisma:reset`. `prisma:reset` menghapus data. `npm run seed` adalah alias
+`--demo` dan tidak menimpa data yang sudah ada.
 
 Server menyala di `http://127.0.0.1:6080`. Cek cepat:
 `http://127.0.0.1:6080/api/health` harus menjawab JSON `ok: true`.
 
 ## Akun demo
 
-Dibuat oleh `scripts\jalankan-lab.cmd --demo` dari root. Sandi publik
-`DemoBatavia123!`, hanya untuk lab loopback. Daftar akun ada di
-`../README.md`. Akun lama `@memoria.lab` (sandi `demo1234`) hanya ada
-bila lab pernah di-seed dengan skrip lama; `--demo` tidak membuatnya.
+Lihat [README root: Akun demo](../README.md#akun-demo) untuk akun dan sandi
+demo. Jalankan `--demo` dari root setelah `--prepare`.
 
 ## Script npm
 
@@ -51,32 +48,23 @@ bila lab pernah di-seed dengan skrip lama; `--demo` tidak membuatnya.
 |---|---|
 | `npm run dev` | Server dengan auto-restart |
 | `npm start` | Server biasa |
-| `npm run seed` | DESTRUKTIF: hapus semua data lalu seed ulang akun lama |
+| `npm run seed` | Alias `--demo`: tambah contoh sintetis tanpa reset |
 | `npm run seed:katalog` | Seed katalog saja, non-destruktif |
-| `npm run uji` | Empat suite uji (lihat catatan di bawah) |
+| `npm run uji` | Suite yang sama dengan runner `--test` |
 | `npm run prisma:deploy` | Terapkan migrasi yang ada |
 | `npm run prisma:studio` | GUI inspeksi database |
 
 ## Uji
 
-Keterbatasan terbuka: suite `uji-boot.js` masih mengharapkan akun
-lama `superadmin@memoria.lab` dengan sandi `demo1234`. Fresh clone yang
-hanya menjalankan `--prepare` dan `--demo` TIDAK memiliki akun itu,
-sehingga `uji-boot.js` gagal pada bagian login seed. Perbaikan fixture
-uji adalah pekerjaan terpisah.
+Dari folder `backend-lab`, jalankan `npm ci`, `npm run prisma:generate`,
+lalu `npm run uji`. Uji tidak perlu `.env`, seed demo, atau database kerja.
+Server HTTP uji memakai port loopback yang dipilih OS.
 
-Alternatif non-destruktif yang tidak bergantung pada akun lama, dari
-folder `backend-lab` dengan server lab dimatikan:
-
-```
-node --test scripts/uji-katalog.js scripts/uji-alur.js scripts/uji-pengguna.js
-```
-
-- `uji-katalog.js`: CRUD katalog dan grant/revoke hak tulis.
-- `uji-alur.js`: alur surat masuk, disposisi, dan surat keluar.
+- `uji-boot.js`: konfigurasi, health, login fixture, izin, dan audit.
+- `uji-katalog.js`: CRUD katalog dan kendali izin.
+- `uji-alur.js`: alur surat, disposisi, dashboard, dan fixture demo.
 - `uji-pengguna.js`: manajemen akun dan kendali izin.
-
-Ketiganya memakai database uji terpisah, bukan `dev.db` kerja.
+- `uji-auth-audit.js`: regresi autentikasi dan audit.
 
 ## Rute dasar
 

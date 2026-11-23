@@ -15,8 +15,8 @@ const AKSI_DIDUKUNG = Object.freeze({
   lampiran:           ['create', 'read', 'delete'],
   klasifikasi:        ['create', 'read', 'update', 'delete'],
   bagian:             ['create', 'read', 'update', 'delete'],
-  jenis_surat:        ['create', 'read', 'update'],
-  jenis_arsip:        ['create', 'read', 'update'],
+  jenis_surat:        ['create', 'read', 'update', 'delete'],
+  jenis_arsip:        ['create', 'read', 'update', 'delete'],
   user:               ['create', 'read', 'update', 'delete'],
   izin:               ['read', 'update'],
   activity_log:       ['read'],
@@ -141,10 +141,15 @@ async function izinEfektif(prisma, user) {
     matriks[r] = {};
     for (const a of AKSI_DIDUKUNG[r]) {
       const key = `${r}::${a}`;
-      if (KHUSUS_SUPERADMIN.has(r) || !peranDikenal) {
+      if (KHUSUS_SUPERADMIN.has(r) || !peranDikenal || (r === 'bagian' && a !== 'read')
+        || (['jenis_surat', 'jenis_arsip'].includes(r) && a === 'delete')) {
+        // Batas bisnis juga tampil pada panel; grant tersimpan tidak boleh mengaku berwenang.
         matriks[r][a] = { boleh: false, sumber: 'role' };
       } else if (peta.has(key)) {
-        matriks[r][a] = { boleh: peta.get(key), sumber: 'eksplisit' };
+        const grant = peta.get(key);
+        matriks[r][a] = a === 'delete' && grant && user.bisa_hapus !== true
+          ? { boleh: false, sumber: 'batas_hapus', boleh_asli: true, sumber_asli: 'eksplisit' }
+          : { boleh: grant, sumber: 'eksplisit' };
       } else {
         matriks[r][a] = { boleh: nilaiDefault(r, a), sumber: 'default' };
       }

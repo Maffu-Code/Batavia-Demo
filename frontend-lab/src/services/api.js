@@ -1,47 +1,57 @@
-/**
- * Axios instance + token management.
- *
- * Token disimpan di memory + localStorage. localStorage dibaca sekali di
- * boot (saat AuthProvider pertama kali render) supaya reload halaman
- * tidak kick user. Setelah itu, state di memory yang jadi truth.
- */
 import axios from 'axios';
 
-// Same-origin proxy Vite pada lab menghindari beda localhost/127.0.0.1.
 const BASE = import.meta.env.VITE_API_BASE || '/api';
+const KEY = 'memoria_token';
+const listeners = new Set();
+const storage = (name) => { try { return window[name]; } catch { return null; } };
+const local = storage('localStorage');
+const session = storage('sessionStorage');
+const read = (store) => { try { return store?.getItem(KEY) ?? null; } catch { return null; } };
+const write = (store, value) => {
+  try { if (value) store?.setItem(KEY, value); else store?.removeItem(KEY); } catch { /* Sesi tetap di memori. */ }
+};
+let token = read(local) || read(session);
+let persistent = Boolean(read(local));
 
-let tokenCache = null;
+export function getToken() { return token; }
 
-export function setToken(t) {
-  tokenCache = t;
-  if (t) localStorage.setItem('memoria_token', t);
-  else localStorage.removeItem('memoria_token');
+function update(next) {
+  if (token === next) return;
+  token = next;
+  listeners.forEach((fn) => fn(token));
 }
 
-export function getToken() {
-  if (tokenCache) return tokenCache;
-  const t = localStorage.getItem('memoria_token');
-  if (t) tokenCache = t;
-  return tokenCache;
+export function setToken(next, remember = false) {
+  persistent = Boolean(next && remember);
+  write(local, persistent ? next : null);
+  write(session, next && !remember ? next : null);
+  update(next);
 }
 
-const api = axios.create({ baseURL: BASE });
+export function onSessionChange(fn) {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
 
-api.interceptors.request.use((config) => {
-  const t = getToken();
-  if (t) config.headers.Authorization = 'Bearer ' + t;
-  return config;
+window.addEventListener('storage', (event) => {
+  if (event.storageArea !== local || (event.key !== KEY && event.key !== null) || (token && !persistent)) return;
+  const next = read(local);
+  persistent = Boolean(next);
+  update(next);
 });
 
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    // 401 global: kick user. Context akan deteksi lewat state cleaning.
-    if (err?.response?.status === 401) {
-      setToken(null);
-    }
-    return Promise.reject(err);
+const api = axios.create({ baseURL: BASE });
+api.interceptors.request.use((config) => {
+  if (token && config.url !== '/auth/login') {
+    config.sessionToken = token;
+    config.headers.Authorization = `Bearer ${token}`;
   }
-);
+  return config;
+});
+api.interceptors.response.use((res) => res, (error) => {
+  // Respons lama atau gagal login tidak boleh mengakhiri sesi yang lebih baru.
+  if (error.response?.status === 401 && error.config?.sessionToken && error.config.sessionToken === token) setToken(null);
+  return Promise.reject(error);
+});
 
 export default api;

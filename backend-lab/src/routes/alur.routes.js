@@ -15,7 +15,9 @@ const run = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next
 const ok = (res, data, status = 200) => res.status(status).json({ success: true, data });
 
 router.get('/referensi', run(async (req, res) => ok(res, await alur.referensi(req.user))));
-router.get('/dashboard', run(async (req, res) => ok(res, await alur.dashboard(req.user))));
+router.get('/dashboard', run(async (req, res) => ok(res, await alur.dashboard(req.user, req.query))));
+router.get('/notifikasi', run(async (req, res) => ok(res, await alur.listNotifikasi(req.user))));
+router.patch('/notifikasi/:id', run(async (req, res) => ok(res, await alur.bacaNotifikasi(req.user, req.params.id, req.body))));
 for (const [slug, jenis] of [['surat-masuk', 'masuk'], ['surat-keluar', 'keluar']]) {
   const resource = `surat_${jenis}`;
   router.get(`/${slug}`, requirePermission(resource, 'read'), run(async (req, res) => res.json({ success: true, ...await alur.listSurat(req.user, jenis, req.query) })));
@@ -28,9 +30,11 @@ for (const [slug, jenis] of [['surat-masuk', 'masuk'], ['surat-keluar', 'keluar'
   }));
 }
 router.get('/disposisi', requirePermission('disposisi', 'read'), run(async (req, res) => res.json({ success: true, ...await alur.listDisposisi(req.user, req.query) })));
-router.get('/disposisi/:id', requirePermission('disposisi', 'read'), run(async (req, res) => ok(res, await alur.findDisposisi(req.user, req.params.id))));
+router.get('/disposisi/:id', requirePermission('disposisi', 'read'), run(async (req, res) => ok(res, await alur.detailDisposisi(req.user, req.params.id))));
 router.post('/disposisi', requirePermission('disposisi', 'create'), run(async (req, res) => {
-  const data = await alur.createDisposisi(req.user, req.body); alur.audit(req, 'create', 'disposisi', data); ok(res, data, 201);
+  const data = await alur.createDisposisi(req.user, req.body);
+  for (const id of data.created_ids) alur.audit(req, 'create', 'disposisi', { id });
+  ok(res, data, 201);
 }));
 router.patch('/disposisi/:id', requirePermission('disposisi', 'update'), run(async (req, res) => {
   const data = await alur.patchDisposisi(req.user, req.params.id, req.body); alur.audit(req, 'update', 'disposisi', data); ok(res, data);
@@ -40,9 +44,9 @@ router.patch('/disposisi/:id', requirePermission('disposisi', 'update'), run(asy
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0, parts: 1 } }).single('file');
 const privateDir = () => path.resolve(process.env.PRIVATE_STORAGE_DIR || path.join(__dirname, '../../storage-private'));
 function jenisSurat(value) {
-  const jenis = { masuk: 'masuk', keluar: 'keluar', surat_masuk: 'masuk', surat_keluar: 'keluar' }[value];
-  if (!jenis) throw new AppError(404, 'Jenis lampiran tidak ditemukan.');
-  return jenis;
+  if (['masuk', 'surat_masuk'].includes(value)) return 'masuk';
+  if (['keluar', 'surat_keluar'].includes(value)) return 'keluar';
+  throw new AppError(404, 'Jenis lampiran tidak ditemukan.');
 }
 function signature(buffer) {
   if (buffer.length >= 8 && buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) return { ext: 'pdf', mime: 'application/pdf' };
@@ -79,11 +83,11 @@ router.get('/lampiran/:id', requirePermission('lampiran', 'read'), run(async (re
   if (!file) throw new AppError(404, 'Lampiran tidak ditemukan.');
   const jenis = jenisSurat(file.entitas_jenis);
   const canReadSurat = await bolehkah(prisma, req.user, `surat_${jenis}`, 'read');
-  if (!canReadSurat) {
-    const canDisposisi = await bolehkah(prisma, req.user, 'disposisi', 'read');
-    if (!canDisposisi) throw new AppError(403, 'Izin untuk operasi ini tidak aktif. Hubungi Superadmin.');
+  if (canReadSurat) await alur.findSurat(req.user, jenis, file.entitas_id);
+  else if (jenis !== 'masuk' || !(await bolehkah(prisma, req.user, 'disposisi', 'read')) ||
+    !(await alur.hasAssignedSurat(req.user, file.entitas_id))) {
+    throw new AppError(403, 'Izin untuk operasi ini tidak aktif. Hubungi Superadmin.');
   }
-  await alur.findSurat(req.user, jenis, file.entitas_id);
   if (!/^[0-9a-f-]{36}\.(pdf|png|jpg)$/.test(file.path_relatif)) throw new AppError(404, 'Lampiran tidak ditemukan.');
   const destination = path.join(privateDir(), file.path_relatif);
   try { await fs.access(destination); } catch { throw new AppError(404, 'Berkas lampiran tidak ditemukan.'); }

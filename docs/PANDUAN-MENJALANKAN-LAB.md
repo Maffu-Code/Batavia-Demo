@@ -2,7 +2,8 @@
 
 Dokumen ini untuk anggota tim developer (mahasiswa) yang baru melakukan
 clone repositori `Batavia` dari GitHub dan belum pernah menjalankannya
-di komputer sendiri.
+di komputer sendiri. [README root](../README.md) menjadi rujukan utama
+konfigurasi lokal, versi Node, dan akun demo.
 Sistem operasi acuan: Windows 11. Semua perintah memakai Command
 Prompt; tidak perlu alat tambahan apa pun selain Node.js, npm, dan Git.
 
@@ -50,7 +51,7 @@ Folder `backend/` dan `frontend/` (versi produksi) belum dibuat.
 Clone repositori terlebih dahulu bila belum:
 
 ```
-git clone PLACEHOLDER_GITHUB_URL
+git clone https://github.com/Maffu-Code/Batavia-Demo.git Batavia
 cd Batavia
 ```
 
@@ -62,13 +63,13 @@ jalankan skrip sebagai `.\scripts\jalankan-lab.cmd`.
 
    ```
    cd backend-lab
-   copy .env.contoh .env
+   if not exist .env copy .env.contoh .env
    ```
 
    Buka `backend-lab/.env` dengan editor teks. Isi atau periksa variabel
    berikut (lihat `backend-lab/.env.contoh` untuk daftar lengkap dan
    penjelasan tiap variabel):
-   - `MODE` harus `lab`.
+   - `MODE` harus `lab`, dan `PORT` harus `6080` agar cocok dengan proxy Vite.
    - `DATABASE_URL` harus `file:./dev.db` (path SQLite lokal, bukan
      database produksi).
    - `JWT_SECRET` wajib diganti dari nilai contoh. Bangkitkan nilai acak
@@ -88,26 +89,10 @@ jalankan skrip sebagai `.\scripts\jalankan-lab.cmd`.
    npm ci
    ```
 
-3. Terapkan migrasi yang sudah disediakan, TANPA membuat migrasi baru:
+3. Masuk ke folder frontend lalu install dependensi sesuai lockfile:
 
    ```
-   npx prisma generate
-   npx prisma migrate deploy
-   ```
-
-   `migrate deploy` menerapkan migrasi yang sudah ada di
-   `backend-lab/prisma/migrations/`. Jangan memakai `migrate dev`, karena
-   perintah itu bisa membuat migrasi baru atau meminta reset database.
-
-   Peringatan: `npm run seed` (skrip lama seed-demo.js) MENGHAPUS semua
-   data lab yang sudah ada lalu mengisi ulang akun lama `@memoria.lab`.
-   Jangan gunakan perintah ini untuk setup biasa; gunakan `--prepare`
-   dan `--demo` pada langkah 6 yang tidak menghapus data.
-
-4. Masuk ke folder frontend lalu install dependensi sesuai lockfile:
-
-   ```
-   cd ../frontend-lab
+   cd ..\frontend-lab
    npm ci
    ```
 
@@ -115,7 +100,7 @@ jalankan skrip sebagai `.\scripts\jalankan-lab.cmd`.
    `/api` dan Vite meneruskannya ke backend port 6080 (proxy). Jangan
    membuat `frontend-lab/.env` kecuali ada alasan khusus.
 
-5. Kembali ke folder root, lalu jalankan pemeriksaan konfigurasi:
+4. Kembali ke folder root, lalu jalankan pemeriksaan konfigurasi:
 
    ```
    cd ..
@@ -123,17 +108,20 @@ jalankan skrip sebagai `.\scripts\jalankan-lab.cmd`.
    ```
 
    Harus menampilkan versi Node yang terpakai dan konfirmasi
-   `MODE=lab; DB lokal`. Kalau gagal, baca pesan error dan lihat bagian
+   `MODE=lab; DB lokal; PORT=6080`. Perintah ini tidak membuka koneksi DB
+   atau mengecek ketersediaan port. Kalau gagal, baca pesan error dan lihat bagian
    Pemecahan Masalah di bawah.
 
-6. Siapkan katalog, lalu tambahkan contoh operasional dan akun demo:
+5. Siapkan katalog, lalu tambahkan contoh operasional dan akun demo:
 
    ```
    scripts\jalankan-lab.cmd --prepare
    scripts\jalankan-lab.cmd --demo
    ```
 
-   --prepare menjalankan generate client, migrate deploy, dan seed katalog.
+   `--prepare` menjalankan `prisma generate`, `prisma migrate deploy`, dan
+   seed katalog. Jangan gunakan `prisma migrate dev` atau `prisma:reset`
+   untuk setup biasa. SQLite `file:./dev.db` ada di `backend-lab/prisma/dev.db`.
    --demo menambah surat, disposisi, unit dan akun sintetis secara idempoten;
    tidak menghapus atau menimpa data yang sudah ada. Jalankan ulang tidak
    me-reset status pekerjaan. Keduanya hanya untuk MODE=lab dan SQLite.
@@ -169,71 +157,31 @@ bersamaan.
 
 ## 5. Akun Demo
 
-Akun baru dari --demo memakai sandi publik `DemoBatavia123!`. HANYA untuk
-loopback lab dan data sintetis.
-
-| Email | Peran / lingkup |
-|---|---|
-| `admin@demo.batavia.invalid` | Superadmin, akun/izin dan sekolah |
-| `tu@demo.batavia.invalid` | TU, input persuratan sekolah |
-| `pimpinan@demo.batavia.invalid` | Kepala Sekolah, telaah dan disposisi |
-| `bagian@demo.batavia.invalid` | Kepala Bagian, unit Kurikulum Demo |
-| `staf@demo.batavia.invalid` | Guru/Staf, hanya penugasan |
-| `staf-lain@demo.batavia.invalid` | Guru/Staf tanpa penugasan |
-
-Akun lama @memoria.lab tetap berlaku bila sebelumnya sudah di-seed. Password
-akun lama tidak diubah. DEMO_PASSWORD opsional melalui environment sebelum
---demo hanya berlaku untuk akun baru, bukan me-reset password akun lama.
-
-Catatan: akun lama memakai domain memoria.lab (nama proyek sebelumnya).
-Skrip lama seed-demo.js menghapus surat/disposisi/user sebelum mengisi ulang.
-Gunakan --demo untuk menambah contoh tanpa reset data.
+Rujukan akun dan sandi: [README root: Akun demo](../README.md#akun-demo).
+`npm run seed` di backend adalah alias `--demo`; keduanya tidak menimpa
+akun, sandi, atau surat lama. Untuk mencoba alur, pilih surat berstatus
+Diterima, tandai telah dibaca sebagai Kepala Sekolah, lalu pilih unit dan
+satu atau beberapa penerima. Setiap penerima mendapat tugas sendiri. Contoh
+penugasan dekat dan lewat tenggat tersedia saat baru di-seed; seed ulang
+tidak menggeser tenggat yang sudah ada.
 
 ## 6. Menjalankan Uji
 
-Dari folder root `Batavia`, dengan server lab dimatikan terlebih dahulu:
+Dari folder root `Batavia`:
 
 ```
 scripts\jalankan-lab.cmd --test
 ```
 
-Perintah ini menjalankan uji-boot.js, uji-katalog.js, uji-alur.js dan
-uji-pengguna.js. Tiga suite terakhir memakai DB sementara, bukan dev.db.
-Uji boot memeriksa konfigurasi kerja dan mencatat percobaan login sintetis.
-Hentikan server lab dahulu agar port uji boot tersedia.
-
-Keterbatasan terbuka: `uji-boot.js` masih mengharapkan akun lama
-`superadmin@memoria.lab` dengan sandi `demo1234`. Fresh clone yang hanya
-menjalankan `--prepare` dan `--demo` TIDAK memiliki akun itu, sehingga
-bagian login seed pada uji boot akan GAGAL. Jangan menganggap `--test`
-lulus penuh pada fresh clone. Perbaikan fixture uji adalah pekerjaan
-terpisah di luar dokumen ini.
-
-Alternatif non-destruktif yang tidak bergantung akun lama, dari folder
-`backend-lab` dengan server lab dimatikan:
-
-```
-node --test scripts/uji-katalog.js scripts/uji-alur.js scripts/uji-pengguna.js
-```
-
-Ketiga suite itu memakai database uji terpisah dan tidak menyentuh
-`dev.db` kerja.
-
-Cara membaca hasil:
-- `uji-boot.js` mencetak baris `OK ...` atau `GAGAL ...` untuk tiap
-  pemeriksaan, lalu baris ringkasan `===== N lolos, N gagal =====` di
-  akhir. Angka gagal harus 0.
-- `uji-katalog.js` memakai `node:test`, jadi hasilnya berupa ringkasan
-  standar Node (jumlah pass dan fail per kasus uji).
-
-Kalau ada yang gagal, baca pesan error yang dicetak; keduanya ditulis
-untuk menunjukkan baris atau kondisi spesifik yang bermasalah, bukan
-sekadar "gagal".
+Alternatif dari `backend-lab`: `npm run uji`. Setelah `npm ci`, jalankan
+`npm run prisma:generate` bila Prisma Client belum ada. Suite memakai DB
+sementara dan port HTTP pilihan OS; tidak perlu `.env`, akun demo, atau
+DB kerja. Lihat jumlah `pass` dan `fail` pada ringkasan Node.
 
 ## 7. Pemecahan Masalah
 
 Port 6080 atau 5173 sudah terpakai
-- Gejala: `scripts\jalankan-lab.cmd` atau `--test` berhenti dengan pesan
+- Gejala: `scripts\jalankan-lab.cmd` berhenti dengan pesan
   port sudah dipakai, atau proses tidak kunjung menyala.
 - Sebab: ada proses lain (sering kali sesi `npm run dev` sebelumnya yang
   belum ditutup) masih mendengarkan di port yang sama.
@@ -255,16 +203,15 @@ Login gagal atau error CORS di browser
 - Gejala: form login di `http://127.0.0.1:5173` menampilkan error
   jaringan, atau console browser menunjukkan pesan terkait CORS atau
   origin ditolak.
-- Sebab: backend menolak permintaan dari origin yang tidak ada di daftar
-  `CORS_ORIGIN` pada `backend-lab/.env`, atau frontend memanggil alamat
-  backend yang salah karena ada `frontend-lab/.env` lama. Hapus file itu
-  bila ada; frontend cukup memakai proxy `/api`.
+- Sebab: frontend memanggil alamat backend yang salah karena ada
+  `frontend-lab/.env` lama atau halaman dibuka dari origin yang tidak
+  diizinkan. Untuk konfigurasi lab biasa, frontend cukup memakai proxy `/api`.
 - Perbaikan: pastikan mengakses frontend lewat
   `http://127.0.0.1:5173` (bukan `localhost:5173` dicampur dengan
   `127.0.0.1` untuk backend secara manual), dan pastikan backend memang
-  menyala (cek `http://127.0.0.1:6080/api/health`). Periksa juga nilai
-  `CORS_ORIGIN` di `backend-lab/.env` masih mencakup kedua bentuk alamat
-  loopback.
+  menyala (cek `http://127.0.0.1:6080/api/health`). Cek juga
+  `http://127.0.0.1:5173/api/health` untuk memastikan proxy Vite bekerja.
+  Origin loopback port 5173 otomatis diizinkan; tidak perlu mengedit `CORS_ORIGIN`.
 
 Lupa membuat file `.env`
 - Gejala: backend langsung keluar saat start dengan pesan

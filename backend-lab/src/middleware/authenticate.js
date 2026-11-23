@@ -20,7 +20,7 @@ async function authenticate(req, res, next) {
 
     let payload;
     try {
-      payload = jwt.verify(token, env.JWT_SECRET);
+      payload = jwt.verify(token, env.JWT_SECRET, { algorithms: ['HS256'] });
     } catch (e) {
       throw new AppError(401, 'Sesi tidak valid atau sudah kedaluwarsa. Silakan login ulang.');
     }

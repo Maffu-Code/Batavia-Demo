@@ -45,6 +45,7 @@ model User {
   tindak_lanjut           TindakLanjut[]
   lampiran_diupload       Lampiran[]
   idempotency_keys        IdempotencyKey[]
+  notifikasi_dibaca       NotifikasiDibaca[]
 
   @@index([deleted_at])
   @@index([peran])
@@ -61,6 +62,7 @@ model Bagian {
 
   users       User[]
   disposisi   Disposisi[]
+  surat_masuk SuratMasuk[]
 
   @@index([deleted_at])
 }
@@ -136,6 +138,7 @@ model SuratMasuk {
   perihal                String
   klasifikasi_id         String
   jenis_surat_id         String?
+  bagian_id              String?
   status                 String   @default("diterima") // diterima, dibaca_pimpinan, didisposisi, selesai, diarsipkan
   sensitif               Boolean  @default(false)
   dibuat_oleh            String
@@ -146,8 +149,10 @@ model SuratMasuk {
   jenis_surat            JenisSurat? @relation(fields: [jenis_surat_id], references: [id])
   klasifikasi            Klasifikasi @relation(fields: [klasifikasi_id], references: [id])
   pembuat                User        @relation("SuratMasukDibuat", fields: [dibuat_oleh], references: [id])
+  bagian                 Bagian?     @relation(fields: [bagian_id], references: [id], onDelete: SetNull)
   disposisi              Disposisi[]
 
+  @@index([bagian_id])
   @@index([deleted_at])
   @@index([status])
   @@index([tanggal_surat])
@@ -198,11 +203,34 @@ model Disposisi {
   ke_bagian              Bagian         @relation(fields: [ke_bagian_id], references: [id])
   ke_user                User?          @relation("DisposisiDiterima", fields: [ke_user_id], references: [id])
   tindak_lanjut          TindakLanjut[]
+  notifikasi             NotifikasiPenugasan?
 
   @@index([deleted_at])
   @@index([status])
   @@index([ke_bagian_id, status])
   @@index([ke_user_id, status])
+}
+
+// Satu event aktif per disposisi. Ganti event saat penerima berubah; tanda
+// baca lama ikut terhapus, tanpa membuat satu event untuk setiap anggota unit.
+model NotifikasiPenugasan {
+  id           String   @id @default(uuid())
+  disposisi_id String   @unique
+  created_at   DateTime @default(now())
+  disposisi    Disposisi @relation(fields: [disposisi_id], references: [id], onDelete: Cascade)
+  dibaca       NotifikasiDibaca[]
+
+  @@index([created_at])
+}
+
+model NotifikasiDibaca {
+  user_id       String
+  notifikasi_id String
+  user          User                @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  notifikasi    NotifikasiPenugasan @relation(fields: [notifikasi_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, notifikasi_id])
+  @@index([notifikasi_id])
 }
 
 model TindakLanjut {

@@ -4,10 +4,10 @@ Runner lintas-bagian untuk versi lab Batavia. Dipakai dari folder root
 proyek lewat Command Prompt Windows:
 
 ```
-scripts\jalankan-lab.cmd --check      Periksa versi Node dan konfigurasi lab
+scripts\jalankan-lab.cmd --check      Validasi konfigurasi lab, tanpa koneksi DB atau cek port
 scripts\jalankan-lab.cmd --prepare    prisma generate + migrate deploy + seed katalog
 scripts\jalankan-lab.cmd --demo       Akun dan contoh operasional sintetis (idempoten)
-scripts\jalankan-lab.cmd --test       Empat suite uji backend (lihat catatan)
+scripts\jalankan-lab.cmd --test       Suite uji dengan database dan port sementara
 scripts\jalankan-lab.cmd              Jalankan backend 6080 + frontend 5173
 ```
 
@@ -22,9 +22,8 @@ Isi:
   `lab` atau database bukan SQLite file lokal. Tidak menulis `.env`,
   tidak me-reset database, tidak melakukan deploy.
 
-Catatan `--test`: suite `uji-boot.js` masih memerlukan akun lama
-`@memoria.lab` yang tidak dibuat oleh `--demo`. Detail dan alternatif
-non-destruktif ada di `backend-lab/README.md` bagian Uji.
+`--test` tidak perlu `.env` atau akun demo; Prisma Client perlu dibangkitkan.
+Akun dan konfigurasi: [README root](../README.md).
 
 Panduan lengkap: `../docs/PANDUAN-MENJALANKAN-LAB.md`.
 

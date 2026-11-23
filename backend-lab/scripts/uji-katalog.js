@@ -1,10 +1,10 @@
 /** Uji HTTP katalog memakai SQLite sementara, bukan database kerja. */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { mkdtempSync, mkdirSync, readFileSync, rmSync } = require('node:fs');
+const { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
-const { randomBytes } = require('node:crypto');
+const { DatabaseSync } = require('node:sqlite');
+const { randomBytes, randomUUID } = require('node:crypto');
 
 const root = path.resolve(__dirname, '..');
 const scratch = process.env.TMPDIR || path.join(process.env.LOCALAPPDATA || require('node:os').homedir(), 'batavia-tests');
@@ -13,15 +13,24 @@ const dir = mkdtempSync(path.join(scratch, 'batavia-uji-'));
 process.env.MODE = 'lab';
 process.env.PORT = '6089';
 process.env.JWT_SECRET = randomBytes(32).toString('hex');
-process.env.DATABASE_URL = `file:${path.join(dir, 'uji.db').replaceAll('\\', '/')}`;
+const file = path.join(dir, 'uji.db').replaceAll('\\', '/');
+process.env.DATABASE_URL = `file:${file}`;
+process.env.STORAGE_DIR = path.join(dir, 'storage');
+process.env.PRIVATE_STORAGE_DIR = path.join(dir, 'private');
+process.env.CORS_ORIGIN = '';
 process.env.LOGIN_RATE_LIMIT_MAX = '100';
-const cli = path.join(root, 'node_modules/prisma/build/index.js');
-const hasil = spawnSync(process.execPath, [cli, 'migrate', 'deploy'], {
-  cwd: root, env: process.env, encoding: 'utf8', timeout: 60000,
-});
-assert.equal(hasil.status, 0, hasil.stderr || hasil.stdout);
+const migrations = path.join(root, 'prisma/migrations');
+const sqlite = new DatabaseSync(file);
+try {
+  for (const name of readdirSync(migrations, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort()) {
+    sqlite.exec(readFileSync(path.join(migrations, name, 'migration.sql'), 'utf8'));
+  }
+} finally { sqlite.close(); }
+const previousCwd = process.cwd();
+process.chdir(dir);
 const prisma = require('../src/config/database');
 const app = require('../src/app');
+const { drainAudit } = require('../src/middleware/logActivity');
 const jwt = require('jsonwebtoken');
 let server;
 
@@ -118,8 +127,8 @@ test('Katalog demo: CRUD aman, izin, audit, seed dan validasi', async (t) => {
       assert.deepEqual(res.map((r) => r.status).sort(), [201, 409]);
       assert.equal(await prisma.jenisSurat.count({ where: { kode: 'serentak' } }), 1);
     });
-    await t.test('audit sukses tercatat sebelum response; kegagalan tidak dicatat', async () => {
-      const { drainAudit } = require('../src/middleware/logActivity');
+    await t.test('audit mencatat perubahan sukses, tetapi bukan perubahan gagal', async () => {
+      await drainAudit();
       const sebelum = await prisma.activityLog.count();
       const r = await req('POST', '/katalog/surat', { kode: 'diaudit', nama: 'Audit Uji' });
       assert.equal(r.status, 201);
@@ -129,6 +138,150 @@ test('Katalog demo: CRUD aman, izin, audit, seed dan validasi', async (t) => {
       await req('POST', '/katalog/surat', { kode: 'diaudit', nama: 'Duplikat' });
       await drainAudit();
       assert.equal(await prisma.activityLog.count(), sebelum + 1);
+    });
+    await t.test('Unit Kerja memakai Bagian yang sama, hanya Superadmin dapat mengelola', async () => {
+      const body = { singkatan: '  lab-uji  ', nama: 'Unit Laboratorium' };
+      await prisma.userPermission.create({ data: { user_id: tu.id, resource: 'bagian', action: 'create', allowed: true } });
+      assert.equal((await req('POST', '/katalog/unit', body, tu)).status, 403);
+      const made = await req('POST', '/katalog/unit', body);
+      assert.equal(made.status, 201);
+      const { id } = made.body.data;
+      assert.equal(made.body.data.singkatan, 'LAB-UJI');
+      assert.equal((await req('POST', '/katalog/unit', { ...body, nama: 'Nama lain' })).status, 409);
+      assert.equal((await req('POST', '/katalog/unit', { ...body, nama: 'UNIT LABORATORIUM', singkatan: 'BEDA' })).status, 409);
+      assert.equal((await req('POST', '/katalog/unit', { ...body, deleted_at: null })).status, 400);
+      assert.ok((await req('GET', '/referensi')).body.data.bagian.some((b) => b.id === id));
+      const account = await req('PATCH', `/pengguna/${tu.id}`, { bagian_id: id });
+      assert.equal(account.status, 200);
+      assert.equal(account.body.data.bagian_id, id);
+      assert.equal((await req('PATCH', `/katalog/unit/${id}`, { aktif: false })).status, 200);
+      assert.equal((await prisma.user.findUnique({ where: { id: tu.id } })).bagian_id, id);
+      assert.ok(!(await req('GET', '/referensi')).body.data.bagian.some((b) => b.id === id));
+      assert.ok((await req('GET', '/katalog/unit', undefined, tu)).body.data.some((b) => b.id === id && !b.aktif));
+      assert.equal((await req('PATCH', `/katalog/unit/${id}`, { aktif: true }, tu)).status, 403);
+      await prisma.userPermission.create({ data: { user_id: tu.id, resource: 'surat_masuk', action: 'delete', allowed: true } });
+      assert.equal((await req('GET', '/auth/izin-saya', undefined, tu)).body.data.izin.surat_masuk.delete.boleh, false);
+    });
+    const konfirmasi = { konfirmasi: 'KONFIRMASI HAPUS' };
+    const modelKatalog = { surat: 'jenisSurat', arsip: 'jenisArsip', unit: 'bagian' };
+    const buatKatalog = async (jenis, extra = {}) => prisma[modelKatalog[jenis]].create({ data: {
+      nama: `Katalog ${randomUUID()}`, ...(jenis === 'unit' ? { singkatan: randomUUID().slice(0, 8) } : { kode: randomUUID() }), ...extra,
+    } });
+    await t.test('DELETE wajib login, UUID sah, jenis dikenal dan frasa persis tanpa field asing', async () => {
+      const row = await buatKatalog('surat');
+      const url = `/katalog/surat/${row.id}`;
+      assert.equal((await req('DELETE', url, konfirmasi, null)).status, 401);
+      assert.equal((await req('DELETE', '/katalog/tidak-dikenal/' + row.id, konfirmasi)).status, 400);
+      assert.equal((await req('DELETE', '/katalog/surat/bukan-uuid', konfirmasi)).status, 400);
+      assert.equal((await req('DELETE', '/katalog/surat/' + randomUUID(), konfirmasi)).status, 404);
+      for (const body of [undefined, null, [], {}, { konfirmasi: true }, { konfirmasi: 'konfirmasi hapus' },
+        { konfirmasi: ' KONFIRMASI HAPUS' }, { konfirmasi: 'KONFIRMASI HAPUS ' }, { konfirmasi: 'KONFIRMASI HAPUS\n' },
+        { konfirmasi: 'KONFIRMASI  HAPUS' }, { ...konfirmasi, paksa: true }]) {
+        assert.equal((await req('DELETE', url, body)).status, 400, JSON.stringify(body));
+        assert.ok(await prisma.jenisSurat.findUnique({ where: { id: row.id } }));
+      }
+    });
+    for (const jenis of Object.keys(modelKatalog)) {
+      await t.test(`${jenis}: hapus permanen hanya entri tidak terpakai, kode/nama dapat dipakai ulang dan audit sukses`, async () => {
+        const row = await buatKatalog(jenis, { aktif: false });
+        const url = `/katalog/${jenis}/${row.id}`;
+        await drainAudit();
+        const before = await prisma.activityLog.count();
+        assert.equal((await req('DELETE', url, { konfirmasi: 'SALAH' })).status, 400);
+        const result = await req('DELETE', url, konfirmasi);
+        assert.equal(result.status, 200, JSON.stringify(result.body));
+        assert.deepEqual(result.body.data, { id: row.id });
+        assert.equal(await prisma[modelKatalog[jenis]].findUnique({ where: { id: row.id } }), null);
+        assert.equal((await req('DELETE', url, konfirmasi)).status, 404);
+        await drainAudit();
+        assert.equal(await prisma.activityLog.count(), before + 1);
+        const logs = await prisma.activityLog.findMany({ where: { entitas: 'katalog', entitas_id: row.id, aksi: 'delete' } });
+        assert.equal(logs.length, 1);
+        assert.equal(logs[0].user_id, admin.id);
+        assert.ok(logs[0].detail.includes(row.nama));
+        assert.ok(logs[0].detail.includes(jenis));
+        assert.ok(!logs[0].detail.includes(konfirmasi.konfirmasi));
+        await prisma[modelKatalog[jenis]].create({ data: { nama: row.nama, ...(jenis === 'unit' ? { singkatan: row.singkatan } : { kode: row.kode }) } });
+      });
+    }
+    await t.test('panel izin nyata mendukung delete; grant tidak menjadikan nonadmin penghapus katalog', async () => {
+      await prisma.user.update({ where: { id: tu.id }, data: { bisa_hapus: true } });
+      for (const [jenis, resource] of [['surat', 'jenis_surat'], ['arsip', 'jenis_arsip'], ['unit', 'bagian']]) {
+        const row = await buatKatalog(jenis);
+        const panel = `/pengguna/${tu.id}/izin`;
+        assert.ok((await req('GET', panel)).body.data.aksi[resource].includes('delete'));
+        for (const allowed of [false, true, null]) {
+          const result = await req('PATCH', panel, { resource, action: 'delete', allowed });
+          assert.equal(result.status, 200, JSON.stringify(result.body));
+          assert.equal(result.body.data.izin[resource].delete.boleh, false);
+          const mine = await req('GET', '/auth/izin-saya', undefined, tu);
+          assert.equal(mine.body.data.izin[resource].delete.boleh, false);
+          assert.equal((await req('DELETE', `/katalog/${jenis}/${row.id}`, konfirmasi, tu)).status, 403);
+          assert.ok(await prisma[modelKatalog[jenis]].findUnique({ where: { id: row.id } }));
+        }
+        assert.equal(await prisma.userPermission.count({ where: { user_id: tu.id, resource, action: 'delete' } }), 0);
+      }
+      for (const action of ['create', 'update']) {
+        const result = await req('PATCH', `/pengguna/${tu.id}/izin`, { resource: 'bagian', action, allowed: true });
+        assert.equal(result.status, 200);
+        assert.equal(result.body.data.izin.bagian[action].boleh, false);
+      }
+      // Pulihkan fixture batas_hapus yang juga dipakai uji sebelumnya.
+      await prisma.user.update({ where: { id: tu.id }, data: { bisa_hapus: false } });
+    });
+    await t.test('jenis surat terpakai oleh masuk/keluar aktif, arsip, dan terhapus tetap 409 tanpa audit hapus', async () => {
+      const klasifikasi = await prisma.klasifikasi.create({ data: { kode: 'HAPUS-UJI', nama: 'Uji Referensi' } });
+      for (const model of ['suratMasuk', 'suratKeluar']) {
+        for (const state of ['aktif', 'arsip', 'terhapus']) {
+          const row = await buatKatalog('surat');
+          const letter = await prisma[model].create({ data: {
+            nomor_registrasi: randomUUID(), nomor_surat: 'Surat Uji', perihal: 'Referensi historis', tanggal_surat: new Date(),
+            klasifikasi_id: klasifikasi.id, dibuat_oleh: admin.id, jenis_surat_id: row.id,
+            ...(model === 'suratMasuk' ? { pengirim: 'Pengirim', tanggal_terima: new Date() } : { tujuan: 'Penerima' }),
+            ...(state === 'arsip' ? { status: 'diarsipkan' } : {}), ...(state === 'terhapus' ? { deleted_at: new Date() } : {}),
+          } });
+          const result = await req('DELETE', `/katalog/surat/${row.id}`, konfirmasi);
+          assert.equal(result.status, 409, `${model} ${state}: ${JSON.stringify(result.body)}`);
+          assert.match(result.body.message, /Nonaktifkan/);
+          assert.equal((await prisma[model].findUnique({ where: { id: letter.id } })).jenis_surat_id, row.id);
+          assert.ok(await prisma.jenisSurat.findUnique({ where: { id: row.id } }));
+          await drainAudit();
+          assert.equal(await prisma.activityLog.count({ where: { entitas_id: row.id, aksi: 'delete' } }), 0);
+        }
+      }
+    });
+    await t.test('unit terkait akun (termasuk nonaktif/terhapus), surat, dan disposisi tidak dapat dihapus', async () => {
+      const klasifikasi = await prisma.klasifikasi.findUnique({ where: { kode: 'HAPUS-UJI' } });
+      for (const state of ['aktif', 'nonaktif', 'terhapus']) {
+        const row = await buatKatalog('unit');
+        const account = await prisma.user.create({ data: { nama_lengkap: 'Akun Referensi', email: `${randomUUID()}@uji.invalid`,
+          password_hash: 'bukan-login', peran: 'guru_staf', bagian_id: row.id,
+          ...(state === 'nonaktif' ? { aktif: false } : {}), ...(state === 'terhapus' ? { deleted_at: new Date() } : {}),
+        } });
+        const result = await req('DELETE', `/katalog/unit/${row.id}`, konfirmasi);
+        assert.equal(result.status, 409, `akun ${state}`); assert.match(result.body.message, /Nonaktifkan/);
+        assert.equal((await prisma.user.findUnique({ where: { id: account.id } })).bagian_id, row.id);
+      }
+      const makeLetter = (extra) => prisma.suratMasuk.create({ data: { nomor_registrasi: randomUUID(), nomor_surat: 'Uji',
+        perihal: 'Uji', tanggal_surat: new Date(), tanggal_terima: new Date(), pengirim: 'Uji', klasifikasi_id: klasifikasi.id, dibuat_oleh: admin.id, ...extra,
+      } });
+      for (const state of ['aktif', 'arsip', 'terhapus']) {
+        const row = await buatKatalog('unit');
+        const letter = await makeLetter({ bagian_id: row.id, ...(state === 'arsip' ? { status: 'diarsipkan' } : {}), ...(state === 'terhapus' ? { deleted_at: new Date() } : {}) });
+        const result = await req('DELETE', `/katalog/unit/${row.id}`, konfirmasi);
+        assert.equal(result.status, 409, `surat ${state}`); assert.match(result.body.message, /Nonaktifkan/);
+        assert.equal((await prisma.suratMasuk.findUnique({ where: { id: letter.id } })).bagian_id, row.id);
+      }
+      const letter = await makeLetter({});
+      for (const state of ['aktif', 'terhapus']) {
+        const row = await buatKatalog('unit');
+        const disposition = await prisma.disposisi.create({ data: { surat_masuk_id: letter.id, dari_user_id: admin.id,
+          ke_bagian_id: row.id, instruksi: 'Uji', ...(state === 'terhapus' ? { deleted_at: new Date() } : {}),
+        } });
+        const result = await req('DELETE', `/katalog/unit/${row.id}`, konfirmasi);
+        assert.equal(result.status, 409, `disposisi ${state}`); assert.match(result.body.message, /Nonaktifkan/);
+        assert.equal((await prisma.disposisi.findUnique({ where: { id: disposition.id } })).ke_bagian_id, row.id);
+      }
     });
     await t.test('seed katalog idempoten dan mempertahankan edit admin', async () => {
       const { seedKatalog } = require('./seed-katalog');
@@ -143,7 +296,9 @@ test('Katalog demo: CRUD aman, izin, audit, seed dan validasi', async (t) => {
     });
   } finally {
     if (server) { server.closeAllConnections(); await new Promise((r) => server.close(r)); }
+    await drainAudit();
     await prisma.$disconnect();
-    rmSync(dir, { recursive: true, force: true });
+    process.chdir(previousCwd);
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
   }
 });

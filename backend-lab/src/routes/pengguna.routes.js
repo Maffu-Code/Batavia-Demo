@@ -79,8 +79,17 @@ function validasiAkun(body, baru) {
   }
   return data;
 }
-async function validasiBagian(db, data) {
-  if (data.bagian_id && !await db.bagian.findFirst({ where: { id: data.bagian_id, aktif: true, deleted_at: null }, select: { id: true } })) {
+async function validasiBagian(db, data, target) {
+  // Perpindahan ke peran lintas unit tidak mewarisi unit lama secara diam-diam.
+  if (target && data.peran !== undefined && data.peran !== target.peran &&
+      ['superadmin', 'kepala_sekolah'].includes(data.peran) && !Object.hasOwn(data, 'bagian_id')) data.bagian_id = null;
+  const akhir = { ...target, ...data };
+  const wajib = ['tata_usaha', 'kepala_bagian', 'guru_staf'].includes(akhir.peran);
+  // Akun lama yang belum berunit tetap dapat ditutup, bukan diedit/diaktifkan.
+  const hanyaNonaktif = target && data.aktif === false && Object.keys(data).length === 1;
+  if (wajib && !akhir.bagian_id && !hanyaNonaktif) salah('Unit kerja wajib dipilih untuk Tata Usaha, Kepala Bagian, dan Guru/Staf.');
+  const periksaAktif = !target || akhir.bagian_id !== target.bagian_id || akhir.peran !== target.peran || (akhir.aktif && !target.aktif);
+  if (akhir.bagian_id && periksaAktif && !await db.bagian.findFirst({ where: { id: akhir.bagian_id, aktif: true, deleted_at: null }, select: { id: true } })) {
     salah('Bagian tidak ditemukan atau tidak aktif.');
   }
 }
@@ -175,7 +184,7 @@ penggunaRoutes.patch('/:id', requirePermission('user', 'update'), async (req, re
         const jumlah = await db.user.count({ where: { peran: 'superadmin', aktif: true, deleted_at: null } });
         if (jumlah <= 1) salah('Minimal satu Superadmin aktif harus dipertahankan.');
       }
-      await validasiBagian(db, data);
+      await validasiBagian(db, data, target);
       return db.user.update({ where: { id }, data, select: PILIH_USER });
     });
     // Nama field saja untuk audit perubahan, tidak pernah menyalin body/sandi.
@@ -207,7 +216,7 @@ penggunaRoutes.patch('/:id/izin', requirePermission('izin', 'update'), async (re
       const target = await ambilUser(db, id);
       if (target.peran === 'superadmin') salah('Izin Superadmin melekat pada peran dan tidak dapat ditimpa.');
       if (!PERAN.includes(target.peran)) salah('Perbaiki peran akun sebelum mengatur izin.');
-      if (KHUSUS_SUPERADMIN.has(resource) && allowed === true) {
+      if (KHUSUS_SUPERADMIN.has(resource) && allowed !== null) {
         throw new AppError(403, 'Administrasi akun, izin, aktivitas, dan pemulihan hanya untuk Superadmin.');
       }
       if (allowed === null) {

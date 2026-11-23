@@ -13,11 +13,23 @@ Object.assign(process.env, {
   MODE: 'lab', PORT: '6092', JWT_SECRET: randomBytes(32).toString('hex'),
   DATABASE_URL: `file:${path.join(dir, 'uji.db').replaceAll('\\', '/')}`,
 });
+// Prisma juga mencari .env di dekat skema; jangan membaca konfigurasi kerja.
+const isEnv = (file) => typeof file === 'string' && /^\.env(?:\.|$)/.test(path.basename(file));
+const exists = fs.existsSync; const read = fs.readFileSync;
+fs.existsSync = (file) => !isEnv(file) && exists(file);
+fs.readFileSync = function (file, ...args) {
+  if (isEnv(file)) { const error = new Error('Environment file unavailable in isolated test.'); error.code = 'ENOENT'; throw error; }
+  return read.call(this, file, ...args);
+};
+const previousCwd = process.cwd();
 const db = new DatabaseSync(path.join(dir, 'uji.db'));
-for (const migration of ['20261022154333_init', '20261030080000_katalog_jenis']) {
-  db.exec(fs.readFileSync(path.join(root, 'prisma/migrations', migration, 'migration.sql'), 'utf8'));
-}
-db.close();
+try {
+  const migrations = path.join(root, 'prisma/migrations');
+  for (const name of fs.readdirSync(migrations).sort()) {
+    const file = path.join(migrations, name, 'migration.sql');
+    if (fs.existsSync(file)) db.exec(fs.readFileSync(file, 'utf8'));
+  }
+} finally { db.close(); }
 process.chdir(dir);
 const prisma = require('../src/config/database');
 const { izinEfektif, bolehkah } = require('../src/services/izin.service');
@@ -84,6 +96,7 @@ test('Akun dan izin: peran, kendali nyata, validasi, audit dan rahasia', async (
     app.use(express.json());
     app.use('/api/pengguna', penggunaRoutes);
     app.use('/api/aktivitas', aktivitasRoutes);
+    app.use('/api/auth', require('../src/routes/auth.routes'));
     app.use('/api/katalog', require('../src/routes/katalog.routes'));
     app.get('/api/probe', authenticate, requirePermission('jenis_surat', 'create'), (req, res) => res.json({ success: true }));
     app.get('/api/probe-surat', authenticate, requirePermission('surat_masuk', 'read'), (req, res) => res.json({ success: true }));
@@ -143,17 +156,22 @@ test('Akun dan izin: peran, kendali nyata, validasi, audit dan rahasia', async (
       for (const q of ['page=0', 'page=1.2', 'limit=101', 'peran=owner', 'aktif=ya', 'q[x]=1', 'asing=1', 'page=1&page=2']) {
         assert.equal((await req('GET', `/api/pengguna?${q}`)).status, 400, q);
       }
-      for (const body of [{ resource: 'jenis_surat', action: 'delete', allowed: true },
+      for (const body of [{ resource: 'izin', action: 'delete', allowed: true },
         { resource: 'surat_masuk', action: 'read', allowed: 'true' },
         { resource: 'surat_masuk', action: 'read' }, { resource: '__proto__', action: 'read', allowed: true },
         { resource: 'surat_masuk', action: 'read', allowed: true, user_id: admin.id },
       ]) assert.equal((await req('PATCH', endpoint(tu), body)).status, 400);
-      assert.equal((await req('PATCH', endpoint(tu), { resource: 'user', action: 'read', allowed: true })).status, 403);
+      for (const allowed of [true, false]) {
+        const denied = await req('PATCH', endpoint(tu), { resource: 'user', action: 'read', allowed });
+        assert.equal(denied.status, 403, 'Administrasi dikunci; pilihan tidak boleh terlihat sukses lalu kembali Bawaan.');
+        assert.equal((await prisma.userPermission.findUnique({ where: { user_id_resource_action: { user_id: tu.id, resource: 'user', action: 'read' } } })).allowed, true, 'Percobaan ditolak tidak mengubah aturan lama.');
+      }
       assert.equal((await req('GET', '/api/pengguna/bukan-uuid/izin')).status, 400);
       assert.equal((await req('GET', `/api/pengguna/${randomUUID()}/izin`)).status, 404);
       assert.equal((await req('PATCH', `/api/pengguna/${randomUUID()}`, { aktif: false })).status, 404);
     });
-    await t.test('Panel mengembalikan metadata dan grant/revoke/reset langsung mengubah guard HTTP', async () => {
+    const izinSesi = token(tu);
+    await t.test('Panel mengembalikan metadata dan grant/revoke/reset langsung mengubah sesi aktif dan guard HTTP', async () => {
       const initial = await req('GET', endpoint(tu));
       assert.equal(initial.status, 200); assert.equal(initial.body.data.user.id, tu.id);
       assert.ok(initial.body.data.aksi.jenis_surat.includes('create'));
@@ -163,7 +181,12 @@ test('Akun dan izin: peran, kendali nyata, validasi, audit dan rahasia', async (
         const r = await req('PATCH', endpoint(tu), { resource: 'jenis_surat', action: 'create', allowed });
         assert.equal(r.status, 200); assert.equal(r.body.data.izin.jenis_surat.create.sumber, source);
         assert.equal(r.body.data.izin.jenis_surat.create.boleh, allowed === true);
-        assert.equal((await req('GET', '/api/probe', undefined, tu)).status, status);
+        const persisted = await req('GET', endpoint(tu));
+        assert.deepEqual(persisted.body.data.izin.jenis_surat.create, r.body.data.izin.jenis_surat.create);
+        const session = await req('GET', '/api/auth/izin-saya', undefined, tu, izinSesi);
+        assert.equal(session.status, 200);
+        assert.deepEqual(session.body.data.izin.jenis_surat.create, r.body.data.izin.jenis_surat.create);
+        assert.equal((await req('GET', '/api/probe', undefined, tu, izinSesi)).status, status);
         const katalog = await req('POST', '/api/katalog/surat', { kode: `izin-${String(allowed)}`, nama: 'Katalog Delegasi' }, tu);
         assert.equal(katalog.status, allowed === true ? 201 : 403);
       }
@@ -226,11 +249,61 @@ test('Akun dan izin: peran, kendali nyata, validasi, audit dan rahasia', async (
       assert.equal((await req('GET', '/api/aktivitas?dari=kemarin')).status, 400);
       assert.equal((await req('GET', '/api/aktivitas?dari=2026-11-10&sampai=2026-11-01')).status, 400);
     });
+    await t.test('Unit wajib pada POST: kosong, null, hilang, tidak aktif, terhapus ditolak untuk ketiga peran', async () => {
+      const inactive = await prisma.bagian.create({ data: { nama: 'Unit Nonaktif', singkatan: 'NON', aktif: false } });
+      const deleted = await prisma.bagian.create({ data: { nama: 'Unit Terhapus', singkatan: 'HPS', deleted_at: new Date() } });
+      for (const peran of ['tata_usaha', 'kepala_bagian', 'guru_staf']) {
+        for (const bagian_id of [undefined, null, '', inactive.id, deleted.id]) {
+          const body = { ...payload, email: `${randomUUID()}@uji.invalid`, peran, bagian_id };
+          const r = await req('POST', '/api/pengguna', body);
+          assert.equal(r.status, 400, `${peran}: ${String(bagian_id)}`);
+        }
+        const r = await req('POST', '/api/pengguna', { ...payload, email: `${randomUUID()}@uji.invalid`, peran });
+        assert.equal(r.status, 201); assert.equal(r.body.data.bagian_id, unit.id);
+      }
+      for (const peran of ['superadmin', 'kepala_sekolah']) {
+        for (const bagian_id of [undefined, null]) {
+          const r = await req('POST', '/api/pengguna', { ...payload, email: `${randomUUID()}@uji.invalid`, peran, bagian_id });
+          assert.equal(r.status, 201); assert.equal(r.body.data.bagian_id, null);
+        }
+      }
+    });
+    await t.test('PATCH menilai hasil gabungan: unit tetap, transisi peran, reaktivasi, unit nonaktif dan akun lama', async () => {
+      const other = await prisma.bagian.create({ data: { nama: 'Unit Lain', singkatan: 'LAIN' } });
+      const inactive = await prisma.bagian.findFirst({ where: { aktif: false } });
+      const target = await user('guru_staf');
+      const patch = (body) => req('PATCH', `/api/pengguna/${target.id}`, body);
+      assert.equal((await patch({ nama_lengkap: 'Nama Baru' })).body.data.bagian_id, unit.id);
+      for (const bagian_id of [null, '', inactive.id, randomUUID()]) assert.equal((await patch({ bagian_id })).status, 400);
+      assert.equal((await patch({ bagian_id: other.id })).body.data.bagian_id, other.id);
+      assert.equal((await patch({ peran: 'tata_usaha' })).body.data.bagian_id, other.id);
+      const cleared = await patch({ peran: 'kepala_sekolah' });
+      assert.equal(cleared.status, 200); assert.equal(cleared.body.data.bagian_id, null);
+      assert.equal((await patch({ peran: 'kepala_bagian' })).status, 400);
+      assert.equal((await patch({ peran: 'kepala_bagian', bagian_id: unit.id })).status, 200);
+      await prisma.bagian.update({ where: { id: unit.id }, data: { aktif: false } });
+      assert.equal((await patch({ nama_lengkap: 'Unit Lama Tetap', bagian_id: unit.id })).status, 200, 'Unrelated PATCH preserves historical inactive unit even if it repeats the current ID.');
+      assert.equal((await patch({ peran: 'guru_staf' })).status, 400);
+      assert.equal((await patch({ aktif: false })).status, 200);
+      assert.equal((await patch({ aktif: true })).status, 400);
+      assert.equal((await patch({ aktif: true, bagian_id: other.id })).status, 200);
+      await prisma.bagian.update({ where: { id: unit.id }, data: { aktif: true } });
+      await prisma.user.update({ where: { id: target.id }, data: { bagian_id: null } });
+      for (const body of [{ nama_lengkap: 'Tanpa Unit' }, { bagian_id: null }, { aktif: true }, { bisa_hapus: true }]) {
+        assert.equal((await patch(body)).status, 400, JSON.stringify(body));
+      }
+      assert.equal((await patch({ aktif: false })).status, 200, 'A legacy invalid account can still be deactivated safely.');
+      assert.equal((await patch({ aktif: true })).status, 400);
+      assert.equal((await patch({ aktif: true, bagian_id: other.id })).status, 200);
+      const stored = await prisma.user.findUnique({ where: { id: target.id } });
+      assert.equal(stored.bagian_id, other.id); assert.equal(stored.aktif, true);
+    });
   } finally {
     await drainAudit();
     if (server) await new Promise((resolve) => server.close(resolve));
     await prisma.$disconnect();
-    process.chdir(scratch);
+    process.chdir(previousCwd);
+    fs.existsSync = exists; fs.readFileSync = read;
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });

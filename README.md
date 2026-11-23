@@ -40,33 +40,50 @@ ikut Git lewat `.gitignore`.
 
 ## Setup ringkas
 
-Detail lengkap dan pemecahan masalah: `docs/PANDUAN-MENJALANKAN-LAB.md`.
+Detail: [Panduan menjalankan lab](docs/PANDUAN-MENJALANKAN-LAB.md).
+Perintah berikut memakai Command Prompt Windows, dari root `Batavia`.
 
-1. Pasang Node.js terpatch dan npm.
-2. `cd backend-lab` lalu `npm ci` dan `copy .env.contoh .env`.
-   Isi `JWT_SECRET` di `.env` dengan nilai acak dari
+1. Pasang Node.js terpatch sesuai daftar di atas. Periksa `node -v` dan `npm -v`.
+2. `cd backend-lab`, lalu `npm ci`. Hanya jika `.env` belum ada, jalankan
+   `if not exist .env copy .env.contoh .env`. Isi `JWT_SECRET` dari perintah
    `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-3. `cd ../frontend-lab` lalu `npm ci`. Frontend tidak perlu `.env`.
-4. Dari root: `scripts\jalankan-lab.cmd --prepare` lalu
-   `scripts\jalankan-lab.cmd --demo`.
-5. Jalankan kedua server: `scripts\jalankan-lab.cmd`.
-6. Buka `http://127.0.0.1:5173`.
+   Konfigurasi minimal `backend-lab/.env`:
+
+   ```dotenv
+   MODE=lab
+   PORT=6080
+   DATABASE_URL="file:./dev.db"
+   JWT_SECRET=<tempel nilai acak dari perintah di atas>
+   ```
+
+   SQLite menyimpan data di `backend-lab/prisma/dev.db`. Jangan commit `.env`.
+3. `cd ..\frontend-lab`, lalu `npm ci`. Frontend tidak perlu `.env`; Vite
+   meneruskan `/api` ke `127.0.0.1:6080`.
+4. `cd ..`, lalu jalankan `scripts\jalankan-lab.cmd --check`,
+   `scripts\jalankan-lab.cmd --prepare` dan `scripts\jalankan-lab.cmd --demo`.
+   `--prepare` menerapkan migrasi yang ada dan mengisi katalog tanpa reset.
+5. `scripts\jalankan-lab.cmd`, lalu buka `http://127.0.0.1:5173`.
+   Tekan Ctrl+C untuk berhenti.
+
+Uji lokal: `scripts\jalankan-lab.cmd --test` (database dan port uji
+terpisah, tidak perlu `.env` atau akun demo; Prisma Client perlu dibangkitkan).
 
 ## Akun demo
 
-Dibuat oleh `--demo`, sandi publik `DemoBatavia123!`, hanya untuk lab
-loopback dengan data sintetis:
+Dibuat oleh `--demo`. Sandi bawaan untuk **akun baru**: `DemoBatavia123!`,
+khusus data sintetis di lab loopback. Form login tidak mengisi sandi.
+Untuk memilih sandi demo sendiri, atur `DEMO_PASSWORD` (minimal 12 karakter)
+di `.env` backend atau environment sebelum seed pertama.
 
 | Email | Peran / lingkup |
 |---|---|
-| `admin@demo.batavia.invalid` | Superadmin |
-| `tu@demo.batavia.invalid` | Tata Usaha |
-| `pimpinan@demo.batavia.invalid` | Kepala Sekolah |
-| `bagian@demo.batavia.invalid` | Kepala Bagian (unit demo) |
-| `staf@demo.batavia.invalid` | Guru/Staf dengan penugasan |
-| `staf-lain@demo.batavia.invalid` | Guru/Staf tanpa penugasan |
+| `pengelola@contoh.batavia.invalid` | Superadmin jika belum ada Superadmin aktif |
+| `dewi.lestari.tu@contoh.batavia.invalid` | Tata Usaha |
+| `randy.septo.anggara@contoh.batavia.invalid` | Kepala Sekolah |
+| `kepala.<singkatan-unit>@contoh.batavia.invalid` | Satu Kepala Bagian per unit aktif |
+| `staf.<singkatan-unit>.<nomor>@contoh.batavia.invalid` | Guru/Staf, minimal dua orang per unit |
 
-`--demo` idempoten dan tidak menimpa data atau akun yang sudah ada.
+`--demo` menambah 50 surat masuk dan 50 keluar sebagai data uji. Menjalankan ulang tidak menimpa data, akun, atau sandi yang sudah ada. Gunakan DB kosong jika ingin tepat 100 surat. TU, Kepala Bagian, dan Guru/Staf wajib berunit. Kepala Sekolah dan Superadmin boleh tanpa unit.
 
 ## Fitur dan batas
 

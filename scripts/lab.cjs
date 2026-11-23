@@ -12,53 +12,75 @@ if (!aman) {
   console.error('Gunakan Node terpatch 22.23.4+, 24.22.1+, atau 26.12.1+ pada cabang tersebut.');
   process.exit(1);
 }
-require(path.join(backend, 'node_modules/dotenv')).config({ path: path.join(backend, '.env') });
-if (process.env.MODE !== 'lab' || !process.env.DATABASE_URL?.startsWith('file:')) {
-  console.error('Runner hanya untuk MODE=lab dan SQLite file lokal. Tidak menyentuh DB produksi.');
+const fs = require('node:fs');
+const command = process.argv[2] || '--run';
+function gagal(pesan) {
+  console.error(pesan);
   process.exit(1);
 }
-const command = process.argv[2] || '--run';
+if (process.argv.length > 3 || !['--check', '--prepare', '--demo', '--test', '--run'].includes(command)) {
+  gagal('Pilihan: --check, --prepare, --demo, --test, --run.');
+}
+function perlu(file, proyek) {
+  if (!fs.existsSync(file)) gagal(`Dependensi ${proyek} belum lengkap. Jalankan npm ci di ${proyek}.`);
+}
 function sekali(file, args = [], cwd = backend) {
   const r = spawnSync(process.execPath, [file, ...args], { cwd, env: process.env, stdio: 'inherit' });
-  if (r.error || r.status !== 0) process.exit(r.status || 1);
+  if (r.error) console.error(r.error.message);
+  if (r.status !== 0) process.exit(r.status || 1);
 }
-const prisma = path.join(backend, 'node_modules/prisma/build/index.js');
+
+perlu(path.join(backend, 'node_modules/dotenv/package.json'), 'backend-lab');
+if (command === '--test') {
+  sekali('--test', ['scripts/uji-boot.js', 'scripts/uji-katalog.js', 'scripts/uji-alur.js', 'scripts/uji-pengguna.js', 'scripts/uji-auth-audit.js', 'scripts/uji-sekolah.js']);
+  process.exit(0);
+}
+
+const envFrontend = { ...process.env, VITE_API_BASE: '/api' };
+process.chdir(backend);
+const env = require(path.join(backend, 'src/config/env'));
+if (!env.LAB) gagal('Runner hanya untuk MODE=lab. MODE=produksi ditolak.');
+if (['--check', '--run'].includes(command) && env.PORT !== 6080) {
+  gagal('Gunakan PORT=6080 untuk runner: proxy Vite /api mengarah ke port 6080.');
+}
 if (command === '--prepare') {
+  const prisma = path.join(backend, 'node_modules/prisma/build/index.js');
+  perlu(prisma, 'backend-lab');
   sekali(prisma, ['generate']);
   sekali(prisma, ['migrate', 'deploy']);
   sekali(path.join(backend, 'scripts/seed-katalog.js'));
-  console.log('Lab siap. Data lama tidak di-reset. Akun demo baru: lihat backend-lab/README.md.');
+  console.log('Lab siap. Data lama tidak di-reset. Akun demo: jalankan --demo.');
 } else if (command === '--demo') {
-  // Kredensial publik khusus data sintetis pada lab loopback, bukan produksi.
   process.env.SEED_ALUR_CONFIRM = 'SINTETIS';
-  process.env.DEMO_PASSWORD = process.env.DEMO_PASSWORD || 'DemoBatavia123!';
   sekali(path.join(backend, 'scripts/seed-alur.js'));
 } else if (command === '--check') {
-  console.log(`Node ${process.versions.node}; MODE=lab; DB lokal. Pemeriksaan konfigurasi awal OK.`);
-} else if (command === '--test') {
-  sekali('--test', ['scripts/uji-boot.js', 'scripts/uji-katalog.js', 'scripts/uji-alur.js', 'scripts/uji-pengguna.js']);
-} else if (command === '--run') {
+  console.log(`Node ${process.versions.node}; MODE=lab; DB lokal; PORT=6080. Konfigurasi OK (tanpa koneksi DB atau cek port).`);
+} else {
+  const vite = path.join(frontend, 'node_modules/vite/bin/vite.js');
+  perlu(vite, 'frontend-lab');
   const children = [];
   let stopping = false;
   function stop(code) {
     if (stopping) return;
     stopping = true;
+    process.exitCode = code;
     for (const child of children) child.kill();
-    setTimeout(() => process.exit(code), 600).unref();
+    setTimeout(() => {
+      for (const child of children) {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+    }, 5500).unref();
   }
   for (const [file, cwd, vars] of [
-    [path.join(backend, 'server.js'), backend, {}],
-    [path.join(frontend, 'node_modules/vite/bin/vite.js'), frontend, { VITE_API_BASE: '/api' }],
+    [path.join(backend, 'server.js'), backend, process.env],
+    [vite, frontend, envFrontend],
   ]) {
-    const child = spawn(process.execPath, [file], { cwd, stdio: 'inherit', env: { ...process.env, ...vars } });
+    const child = spawn(process.execPath, [file], { cwd, stdio: 'inherit', env: vars });
     children.push(child);
     child.on('error', (e) => { console.error(e.message); stop(1); });
-    child.on('exit', (code) => stop(code || 0));
+    child.on('exit', (code) => stop(code ?? 1));
   }
   process.on('SIGINT', () => stop(0));
   process.on('SIGTERM', () => stop(0));
-  console.log('Batavia Lab: http://127.0.0.1:5173 . Ctrl+C menutup kedua server.');
-} else {
-  console.error('Pilihan: --check, --prepare (migrasi aditif + seed katalog), --demo (contoh operasional non-destruktif), --test, --run.');
-  process.exit(1);
+  console.log('Memulai Batavia Lab: http://127.0.0.1:5173 . Ctrl+C menutup kedua server.');
 }

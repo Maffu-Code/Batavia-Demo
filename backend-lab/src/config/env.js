@@ -27,15 +27,33 @@ if (process.env.JWT_SECRET.length < 32) {
 
 const MODE = process.env.MODE;
 if (!['lab', 'produksi'].includes(MODE)) {
-  console.error(`[env] MODE harus "lab" atau "produksi", bukan "${MODE}".`);
+  console.error('[env] MODE harus "lab" atau "produksi".');
   process.exit(1);
+}
+
+const PORT = Number(process.env.PORT);
+if (!/^\d+$/.test(process.env.PORT) || PORT < 1 || PORT > 65535) {
+  console.error('[env] PORT harus bilangan bulat dari 1 sampai 65535.');
+  process.exit(1);
+}
+
+if (MODE === 'lab') {
+  const url = process.env.DATABASE_URL;
+  const file = url.slice('file:'.length).replaceAll('\\', '/');
+  // URI dengan otoritas, UNC, opsi SQLite dan DB in-memory bukan file lab lokal.
+  const localPath = file.replace(/^[a-z]:\//i, '/');
+  if (!url.startsWith('file:') || !file.trim() || localPath.startsWith('//') ||
+      /[:?%#\x00-\x1f]/.test(localPath) || /(?:^|\/)\.{0,2}$/.test(localPath)) {
+    console.error('[env] DATABASE_URL lab harus menunjuk file SQLite lokal; contoh: file:./dev.db.');
+    process.exit(1);
+  }
 }
 
 const env = {
   MODE,
   PRODUKSI: MODE === 'produksi',
   LAB: MODE === 'lab',
-  PORT: parseInt(process.env.PORT, 10),
+  PORT,
   JWT_SECRET: process.env.JWT_SECRET,
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '12h',
   CORS_ORIGIN: [...new Set([
